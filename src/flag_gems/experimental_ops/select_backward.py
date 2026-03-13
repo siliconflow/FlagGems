@@ -7,8 +7,8 @@ import triton.language as tl
 
 @triton.jit
 def _select_backward_kernel(
-    grad_ptr,
-    out_ptr,
+    grad_ptr: tl.pointer_type,
+    out_ptr: tl.pointer_type,
     outer_size,
     inner_size,
     dim_stride,
@@ -25,7 +25,7 @@ def _select_backward_kernel(
     outer = offs // inner_size
     inner = offs % inner_size
 
-    grad_vals = tl.load(grad_ptr + outer * inner_size + inner, mask=mask, other=0)
+    grad_vals = tl.load(grad_ptr + outer * inner_size + inner, mask=mask)
 
     out_offset = outer * dim_stride + index * inner_size + inner
 
@@ -80,7 +80,8 @@ def _launch_select_backward(grad, input_sizes, dim, index, out=None):
     dim_stride = dim_size * inner_size
 
     BLOCK = 1024
-    grid = lambda meta: (triton.cdiv(outer_size * inner_size, meta["BLOCK"]),)
+    n_elements = outer_size * inner_size
+    grid = lambda meta: (triton.cdiv(n_elements, meta["BLOCK"]),)
 
     _select_backward_kernel[grid](
         grad_view,
@@ -95,9 +96,5 @@ def _launch_select_backward(grad, input_sizes, dim, index, out=None):
     return out
 
 
-def select_backward(grad, input_sizes, dim, index):
-    return _launch_select_backward(grad, input_sizes, dim, index, out=None)
-
-
-def select_backward_out(grad, input_sizes, dim, index, out):
+def select_backward(grad, input_sizes, dim, index, out=None):
     return _launch_select_backward(grad, input_sizes, dim, index, out=out)

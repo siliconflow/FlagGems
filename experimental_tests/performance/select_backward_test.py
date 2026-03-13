@@ -1,65 +1,117 @@
-import os
-import sys
+import math
 
-import pytest
 import torch
 import triton
+import triton.testing
 
 import flag_gems
-from flag_gems.experimental_ops.select_backward import \
-    select_backward as gems_select_backward
+from flag_gems.experimental_ops.select_backward import select_backward
 
-sys.path.insert(0, os.path.join(os.path.dirname(__file__), "../.."))
+SHAPES = [
+    (128, 256),
+    (64, 128, 256),
+    (1024, 4096),
+    (32, 64, 128, 256),
+]
+
+DTYPES = [
+    torch.float32,
+    torch.float16,
+]
+
+DIMS = [0, 1, -1]
 
 
-@pytest.mark.select_backward
-@pytest.mark.parametrize(
-    "shape",
-    [
-        (128, 256),
-        (64, 128, 256),
-        (32, 64, 128, 256),
-    ],
+SIZES = [math.prod(s) for s in SHAPES]
+
+
+@triton.testing.perf_report(
+    triton.testing.Benchmark(
+        x_names=["size"],
+        x_vals=SIZES,
+        line_arg="provider",
+        line_vals=["pytorch", "triton"],
+        line_names=["PyTorch", "FlagGems"],
+        styles=[("green", "-"), ("blue", "-")],
+        ylabel="Bandwidth (GB/s)",
+        plot_name="select_backward_performance",
+        args={},
+    )
 )
-@pytest.mark.parametrize("dtype", [torch.float32, torch.float16, torch.bfloat16])
-@pytest.mark.parametrize("dim", [0, 1, -1])
-def test_select_backward_benchmark(shape, dtype, dim):
+def benchmark_select_backward(size, provider, device=flag_gems.device):
 
-    device = flag_gems.device
+    shape = None
+    for s in SHAPES:
+        if math.prod(s) == size:
+            shape = s
+            break
+
+    if shape is None:
+        raise RuntimeError("shape not found")
+
+    dtype = torch.float16
+    dim = 1
 
     x = torch.randn(shape, device=device, dtype=dtype, requires_grad=True)
 
-    dim = dim if dim >= 0 else dim + len(shape)
+    ndim = len(shape)
+    actual_dim = dim if dim >= 0 else dim + ndim
 
-    index = shape[dim] // 2
+    index = shape[actual_dim] // 2
 
-    y = torch.select(x, dim, index)
-
+    y = torch.select(x, actual_dim, index)
     grad = torch.randn_like(y)
+
+    out = torch.empty_like(x)
+
+    element_size = grad.element_size()
+
+    bytes_moved = (grad.numel() + x.numel()) * element_size
 
     quantiles = [0.5, 0.2, 0.8]
 
-    def torch_impl():
-        x.grad = None
-        y = torch.select(x, dim, index)
-        y.backward(grad)
+    if provider == "pytorch":
 
-    ms_torch, _, _ = triton.testing.do_bench(
-        torch_impl,
-        rep=100,
-        quantiles=quantiles,
-    )
+        def torch_impl():
 
-    with flag_gems.use_gems():
+            if x.grad is not None:
+                x.grad.zero_()
 
-        ms_triton, _, _ = triton.testing.do_bench(
-            lambda: gems_select_backward(grad, x.shape, dim, index),
+            y.backward(grad, retain_graph=True)
+
+        ms, min_ms, max_ms = triton.testing.do_bench(
+            torch_impl,
             rep=100,
             quantiles=quantiles,
         )
 
-    speedup = ms_torch / ms_triton
+    elif provider == "triton":
 
-    print(f"select_backward {shape} {dtype}:")
-    print(f"  FlagGems: {ms_triton:.3f}ms")
-    print(f"  Speedup: {speedup:.2f}x")
+        def triton_impl():
+
+            select_backward(
+                grad,
+                x.shape,
+                actual_dim,
+                index,
+                out=out,
+            )
+
+        ms, min_ms, max_ms = triton.testing.do_bench(
+            triton_impl,
+            rep=100,
+            quantiles=quantiles,
+        )
+
+    def gbps(ms):
+        return bytes_moved / (ms * 1e-3) / 1e9
+
+    return gbps(ms), gbps(min_ms), gbps(max_ms)
+
+
+if __name__ == "__main__":
+
+    benchmark_select_backward.run(
+        print_data=True,
+        save_path="./benchmark_results",
+    )
