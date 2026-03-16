@@ -5,7 +5,7 @@ import triton
 import triton.testing
 
 import flag_gems
-from flag_gems.experimental_ops.select_backward import select_backward
+from flag_gems.ops.select_backward import select_backward
 
 SHAPES = [
     (128, 256),
