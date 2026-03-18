@@ -1,10 +1,10 @@
-import pytest
-import torch
 from typing import Generator
 
-from benchmark.performance_utils import Benchmark, generate_tensor_input
-from benchmark.attri_util import FLOAT_DTYPES
+import pytest
+import torch
 
+from benchmark.attri_util import FLOAT_DTYPES
+from benchmark.performance_utils import Benchmark, generate_tensor_input
 from flag_gems.ops.select_backward import select_backward
 
 

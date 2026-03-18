@@ -5,8 +5,7 @@ import pytest
 import torch
 
 import flag_gems
-from flag_gems.ops.select_backward import \
-    select_backward as gems_select_backward
+from flag_gems.ops.select_backward import select_backward as gems_select_backward
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), "../.."))
 
