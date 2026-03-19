@@ -20,7 +20,6 @@ class SelectBackwardBenchmark(Benchmark):
 
     def get_input_iter(self, cur_dtype) -> Generator:
         for shape in self.shapes:
-
             x = generate_tensor_input(shape, cur_dtype, self.device)
             ndim = len(shape)
 
@@ -45,7 +44,6 @@ class SelectBackwardBenchmark(Benchmark):
     FLOAT_DTYPES,
 )
 def test_select_backward_perf(dtype):
-
     bench = SelectBackwardBenchmark(
         op_name="select_backward",
         torch_op=select_backward,

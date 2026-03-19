@@ -33,7 +33,6 @@ def _select_backward_kernel(
 
 
 def _launch_select_backward(grad, input_sizes, dim, index, out=None):
-
     if not grad.is_cuda:
         raise ValueError("grad must be CUDA tensor")
 
