@@ -56,8 +56,6 @@ def _launch_select_backward(grad, input_sizes, dim, index, out=None):
     outer_size = math.prod(sizes[:dim]) if dim > 0 else 1
     inner_size = math.prod(sizes[dim + 1 :]) if dim < ndim - 1 else 1
 
-    grad_expected = (outer_size, inner_size)
-
     grad_view = grad.contiguous().view(outer_size, inner_size)
 
     if out is None:

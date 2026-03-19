@@ -5,10 +5,9 @@ import pytest
 import torch
 
 import flag_gems
+from tests.accuracy_utils import FLOAT_DTYPES, gems_assert_close, to_reference
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), "../.."))
-
-from tests.accuracy_utils import FLOAT_DTYPES, gems_assert_close, to_reference
 
 
 @pytest.mark.select_backward
