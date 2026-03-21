@@ -8,11 +8,7 @@ import flag_gems
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), "../.."))
 
-from tests.accuracy_utils import (
-    FLOAT_DTYPES,
-    gems_assert_close,
-    to_reference,
-)
+from tests.accuracy_utils import FLOAT_DTYPES, gems_assert_close, to_reference
 
 
 def normalize_1d_shape(shape):
@@ -66,9 +62,7 @@ def upsample_linear1d_backward_call(grad, input_size, align_corners):
 @pytest.mark.parametrize("dtype", FLOAT_DTYPES)
 @pytest.mark.parametrize("scale_factor", [0.5, 1.5, 2.0])
 @pytest.mark.parametrize("align_corners", [False, True])
-def test_accuracy_upsample_linear1d_backward(
-    shape, dtype, scale_factor, align_corners
-):
+def test_accuracy_upsample_linear1d_backward(shape, dtype, scale_factor, align_corners):
     device = flag_gems.device
 
     in_w = shape[-1]
@@ -101,7 +95,7 @@ def test_accuracy_upsample_linear1d_backward(
     assert res.shape == tuple(shape)
     assert res.dtype == grad.dtype
 
-    atol=1e-4 if dtype == torch.float32 else 2e-2
+    atol = 1e-4 if dtype == torch.float32 else 2e-2
     gems_assert_close(res, ref, dtype, atol=atol)
 
 
@@ -143,7 +137,7 @@ def test_upsample_linear1d_backward_non_contiguous(dtype):
             False,
         )
 
-    atol=1e-4 if dtype == torch.float32 else 2e-2
+    atol = 1e-4 if dtype == torch.float32 else 2e-2
     gems_assert_close(res, ref, dtype, atol=atol)
 
 
@@ -176,5 +170,5 @@ def test_upsample_linear1d_backward_small_and_edge(dtype):
             False,
         )
 
-    atol=1e-4 if dtype == torch.float32 else 2e-2
+    atol = 1e-4 if dtype == torch.float32 else 2e-2
     gems_assert_close(res, ref, dtype, atol=atol)

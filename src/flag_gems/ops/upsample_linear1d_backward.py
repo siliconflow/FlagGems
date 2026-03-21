@@ -7,9 +7,16 @@ import triton.language as tl
 def upsample_linear1d_backward_gather_window_kernel(
     grad_out_ptr,
     grad_in_ptr,
-    n, c, in_w, out_w,
-    go_stride_n, go_stride_c, go_stride_w,
-    gi_stride_n, gi_stride_c, gi_stride_w,
+    n,
+    c,
+    in_w,
+    out_w,
+    go_stride_n,
+    go_stride_c,
+    go_stride_w,
+    gi_stride_n,
+    gi_stride_c,
+    gi_stride_w,
     align_corners: tl.constexpr,
     BLOCK: tl.constexpr,
 ):
@@ -19,13 +26,13 @@ def upsample_linear1d_backward_gather_window_kernel(
     total = n * c * in_w
     mask = offs < total
 
-    x_in  = offs % in_w
-    tmp   = offs // in_w
+    x_in = offs % in_w
+    tmp = offs // in_w
     c_idx = tmp % c
     n_idx = tmp // c
 
-    x_in_f  = x_in.to(tl.float32)
-    in_w_f  = tl.cast(in_w,  tl.float32)
+    x_in_f = x_in.to(tl.float32)
+    in_w_f = tl.cast(in_w, tl.float32)
     out_w_f = tl.cast(out_w, tl.float32)
 
     if align_corners:
@@ -38,11 +45,7 @@ def upsample_linear1d_backward_gather_window_kernel(
 
     base = tl.floor(center).to(tl.int32)
 
-    go_base = (
-        grad_out_ptr
-        + n_idx * go_stride_n
-        + c_idx * go_stride_c
-    )
+    go_base = grad_out_ptr + n_idx * go_stride_n + c_idx * go_stride_c
 
     acc = tl.zeros([BLOCK], dtype=tl.float32)
 
@@ -60,8 +63,8 @@ def upsample_linear1d_backward_gather_window_kernel(
             x_real = (x_out_f + 0.5) * in_w_f / out_w_f - 0.5
 
         x0_f = tl.floor(x_real)
-        w1   = x_real - x0_f
-        w0   = 1.0 - w1
+        w1 = x_real - x0_f
+        w0 = 1.0 - w1
 
         x0_i = tl.maximum(x0_f, 0.0).to(tl.int32)
         x1_i = tl.minimum(x0_f + 1.0, in_w_f - 1.0).to(tl.int32)
@@ -72,19 +75,16 @@ def upsample_linear1d_backward_gather_window_kernel(
             other=0.0,
         ).to(tl.float32)
 
-        same = (x0_i == x1_i)
-        is_x0 = (x_in.to(tl.int32) == x0_i)
-        is_x1 = (x_in.to(tl.int32) == x1_i)
+        same = x0_i == x1_i
+        is_x0 = x_in.to(tl.int32) == x0_i
+        is_x1 = x_in.to(tl.int32) == x1_i
 
-        acc += tl.where( same & is_x0,  g * (w0 + w1), 0.0)
-        acc += tl.where(~same & is_x0,  g * w0,        0.0)
-        acc += tl.where(~same & is_x1,  g * w1,        0.0)
+        acc += tl.where(same & is_x0, g * (w0 + w1), 0.0)
+        acc += tl.where(~same & is_x0, g * w0, 0.0)
+        acc += tl.where(~same & is_x1, g * w1, 0.0)
 
     gi_ptr = (
-        grad_in_ptr
-        + n_idx * gi_stride_n
-        + c_idx * gi_stride_c
-        + x_in * gi_stride_w
+        grad_in_ptr + n_idx * gi_stride_n + c_idx * gi_stride_c + x_in * gi_stride_w
     )
 
     tl.store(gi_ptr, acc, mask=mask)
@@ -125,10 +125,18 @@ def upsample_linear1d_backward_gather_window(
     grid = (triton.cdiv(total, BLOCK),)
 
     upsample_linear1d_backward_gather_window_kernel[grid](
-        grad_out_3d, grad_in,
-        n, c, in_w, out_w,
-        go_stride_n, go_stride_c, go_stride_w,
-        gi_stride_n, gi_stride_c, gi_stride_w,
+        grad_out_3d,
+        grad_in,
+        n,
+        c,
+        in_w,
+        out_w,
+        go_stride_n,
+        go_stride_c,
+        go_stride_w,
+        gi_stride_n,
+        gi_stride_c,
+        gi_stride_w,
         align_corners,
         BLOCK=BLOCK,
     )
@@ -165,4 +173,5 @@ def upsample_linear1d_backward(
     norm_input_size = (n, c, in_w)
 
     return upsample_linear1d_backward_gather_window(
-        grad_output, norm_input_size, align_corners)
+        grad_output, norm_input_size, align_corners
+    )
