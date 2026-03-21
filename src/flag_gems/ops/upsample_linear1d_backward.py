@@ -4,7 +4,7 @@ import triton.language as tl
 
 
 @triton.jit
-def upsample_linear1d_backward_gather_window_kernel(
+def upsample_linear1d_backward_kernel(
     grad_out_ptr,
     grad_in_ptr,
     n,
@@ -86,62 +86,7 @@ def upsample_linear1d_backward_gather_window_kernel(
     gi_ptr = (
         grad_in_ptr + n_idx * gi_stride_n + c_idx * gi_stride_c + x_in * gi_stride_w
     )
-
     tl.store(gi_ptr, acc, mask=mask)
-
-
-def upsample_linear1d_backward_gather_window(
-    grad_out: torch.Tensor,
-    input_size: tuple,
-    align_corners: bool,
-) -> torch.Tensor:
-    assert grad_out.is_cuda
-
-    if len(input_size) == 3:
-        n, c, in_w = input_size
-    elif len(input_size) == 2:
-        n, c, in_w = input_size[0], 1, input_size[1]
-    elif len(input_size) == 1:
-        n, c, in_w = 1, 1, input_size[0]
-    else:
-        raise ValueError
-
-    out_w = grad_out.shape[-1]
-    grad_out_3d = grad_out.contiguous().view(n, c, out_w)
-
-    grad_in = torch.empty(
-        (n, c, in_w),
-        device=grad_out.device,
-        dtype=grad_out.dtype,
-    )
-
-    go_stride_n, go_stride_c, go_stride_w = grad_out_3d.stride()
-    gi_stride_n, gi_stride_c, gi_stride_w = grad_in.stride()
-
-    elem_size = grad_out.element_size()
-    BLOCK = 1024 if elem_size <= 2 else 512
-
-    total = n * c * in_w
-    grid = (triton.cdiv(total, BLOCK),)
-
-    upsample_linear1d_backward_gather_window_kernel[grid](
-        grad_out_3d,
-        grad_in,
-        n,
-        c,
-        in_w,
-        out_w,
-        go_stride_n,
-        go_stride_c,
-        go_stride_w,
-        gi_stride_n,
-        gi_stride_c,
-        gi_stride_w,
-        align_corners,
-        BLOCK=BLOCK,
-    )
-
-    return grad_in.to(grad_out.dtype)
 
 
 def upsample_linear1d_backward(
@@ -170,8 +115,35 @@ def upsample_linear1d_backward(
 
     assert grad_output.shape[-1] == out_w
 
-    norm_input_size = (n, c, in_w)
+    grad_out_3d = grad_output.contiguous().view(n, c, out_w)
 
-    return upsample_linear1d_backward_gather_window(
-        grad_output, norm_input_size, align_corners
+    grad_in = torch.zeros(
+        (n, c, in_w),
+        device=grad_output.device,
+        dtype=grad_output.dtype,
     )
+
+    go_stride_n, go_stride_c, go_stride_w = grad_out_3d.stride()
+    gi_stride_n, gi_stride_c, gi_stride_w = grad_in.stride()
+
+    BLOCK = 512
+    grid = (triton.cdiv(n * c * in_w, BLOCK),)
+
+    upsample_linear1d_backward_kernel[grid](
+        grad_out_3d,
+        grad_in,
+        n,
+        c,
+        in_w,
+        out_w,
+        go_stride_n,
+        go_stride_c,
+        go_stride_w,
+        gi_stride_n,
+        gi_stride_c,
+        gi_stride_w,
+        align_corners,
+        BLOCK=BLOCK,
+    )
+
+    return grad_in
