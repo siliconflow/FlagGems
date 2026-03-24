@@ -282,6 +282,7 @@ _FULL_CONFIG = (
     ("randperm", randperm),
     ("reciprocal", reciprocal),
     ("reciprocal_", reciprocal_),
+    ("reflection_pad2d", reflection_pad2d),
     ("relu", relu),
     ("relu_", relu_),
     ("remainder.Scalar", remainder),
