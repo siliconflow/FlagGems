@@ -1138,7 +1138,7 @@ class SelectBackwardBenchmark(Benchmark):
 def test_select_backward_perf(dtype):
     bench = SelectBackwardBenchmark(
         op_name="select_backward",
-        torch_op=flag_gems.ops.select_backward,
+        torch_op=torch.ops.aten.select_backward,
         dtypes=[dtype],
     )
 
