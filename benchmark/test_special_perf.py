@@ -1395,30 +1395,28 @@ class UpsampleBicubic2dAaBackwardBenchmark(Benchmark):
         super().__init__(*args, **kwargs)
         self._cfgs = [
             # Small / medium — fused path targets
-            (4,  16,   4,   4,   1,   1, False, "tiny 4x down"),
-            (4,  16,   4,   4,  16,  16, False, "small 4x up"),
-            (4,  16,  16,  16,   4,   4, False, "small 4x down"),
-            (4,  16,  16,  32,  64, 128, False, "small->med 4x up"),
-            (1,   1,  64,  64,  16,  16, False, "C=1 4x down"),
-            (1,   1,  64,  64,  32,  32, False, "C=1 2x down"),
-            (1,   1,  64,  64, 128, 128, False, "C=1 2x up"),
-            (4,   3, 256, 256, 128, 128, False, "C=3 2x down"),
-            (4,   3, 128, 128, 256, 256, False, "C=3 2x up"),
-            (4,  64,  64,  64,  32,  32, False, "C=64 2x down"),
+            (4, 16, 4, 4, 1, 1, False, "tiny 4x down"),
+            (4, 16, 4, 4, 16, 16, False, "small 4x up"),
+            (4, 16, 16, 16, 4, 4, False, "small 4x down"),
+            (4, 16, 16, 32, 64, 128, False, "small->med 4x up"),
+            (1, 1, 64, 64, 16, 16, False, "C=1 4x down"),
+            (1, 1, 64, 64, 32, 32, False, "C=1 2x down"),
+            (1, 1, 64, 64, 128, 128, False, "C=1 2x up"),
+            (4, 3, 256, 256, 128, 128, False, "C=3 2x down"),
+            (4, 3, 128, 128, 256, 256, False, "C=3 2x up"),
+            (4, 64, 64, 64, 32, 32, False, "C=64 2x down"),
             # Large — 2-pass path targets
-            (1,  64, 512, 512, 128, 128, False, "C=64 4x down"),
-            (1,  64, 512, 512,1024,1024, False, "C=64 2x up"),
-            (512, 1024, 32, 32,  8,  8, False, "NC=524K 4x down"),
-            (256,  512, 64, 64, 16, 16, False, "NC=131K 4x down"),
-            (256,  512, 64, 64, 32, 32, False, "NC=131K 2x down"),
-            (256,  512, 64, 64,128,128, False, "NC=131K 2x up"),
+            (1, 64, 512, 512, 128, 128, False, "C=64 4x down"),
+            (1, 64, 512, 512, 1024, 1024, False, "C=64 2x up"),
+            (512, 1024, 32, 32, 8, 8, False, "NC=524K 4x down"),
+            (256, 512, 64, 64, 16, 16, False, "NC=131K 4x down"),
+            (256, 512, 64, 64, 32, 32, False, "NC=131K 2x down"),
+            (256, 512, 64, 64, 128, 128, False, "NC=131K 2x up"),
         ]
 
     def get_input_iter(self, cur_dtype):
         for N, C, Hi, Wi, Ho, Wo, ac, label in self._cfgs:
-            grad = torch.randn(
-                [N, C, Ho, Wo], device=self.device, dtype=cur_dtype
-            )
+            grad = torch.randn([N, C, Ho, Wo], device=self.device, dtype=cur_dtype)
             yield grad, [Ho, Wo], [N, C, Hi, Wi], ac, None, None, label
 
     def get_tflops(self, op, *args, **kwargs):
@@ -1435,4 +1433,3 @@ def test_upsample_bicubic2d_aa_backward():
     )
 
     bench.run()
-

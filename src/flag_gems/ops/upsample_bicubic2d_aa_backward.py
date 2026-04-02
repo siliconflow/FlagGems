@@ -1,5 +1,5 @@
-import math
 import logging
+import math
 
 import torch
 import triton
@@ -26,22 +26,30 @@ def _cubic_aa_filter(x):
 def _f2i(x):
     """float -> int32 with clamping to avoid undefined overflow."""
     _LO: tl.constexpr = -2147483648.0
-    _HI: tl.constexpr =  2147483520.0
+    _HI: tl.constexpr = 2147483520.0
     return tl.minimum(tl.maximum(x, _LO), _HI).to(tl.int32)
 
 
 @triton.jit
 def _fused_backward_kernel(
-    grad_out_ptr,       # [NC, H_out, W_out] flat
-    grad_in_ptr,        # [NC, H_in,  W_in]  flat (output)
+    grad_out_ptr,  # [NC, H_out, W_out] flat
+    grad_in_ptr,  # [NC, H_in,  W_in]  flat (output)
     # H params
-    H_in, H_out,
-    h_scale, support_h, invscale_h, inv_h_scale,
+    H_in,
+    H_out,
+    h_scale,
+    support_h,
+    invscale_h,
+    inv_h_scale,
     # W params
-    W_in, W_out,
-    w_scale, support_w, invscale_w, inv_w_scale,
+    W_in,
+    W_out,
+    w_scale,
+    support_w,
+    invscale_w,
+    inv_w_scale,
     # Stride
-    stride_go_nc,       # = H_out * W_out
+    stride_go_nc,  # = H_out * W_out
     # Compile-time constants
     BLOCK_IW: tl.constexpr,
     MAX_OH: tl.constexpr,
@@ -49,11 +57,11 @@ def _fused_backward_kernel(
     MAX_KSIZE_H: tl.constexpr,
     MAX_KSIZE_W: tl.constexpr,
 ):
-    pid_row = tl.program_id(0)          # nc * H_in + ih
-    pid_col = tl.program_id(1)          # iw tile
+    pid_row = tl.program_id(0)  # nc * H_in + ih
+    pid_col = tl.program_id(1)  # iw tile
 
     nc = pid_row // H_in
-    ih = pid_row %  H_in
+    ih = pid_row % H_in
     ih_f = ih.to(tl.float32)
 
     iw_base = pid_col * BLOCK_IW
@@ -62,12 +70,10 @@ def _fused_backward_kernel(
     iw_f = iws.to(tl.float32)
 
     # Scalar: which oh values contribute to this ih
-    oh_start = tl.maximum(
-        _f2i((ih_f + 0.5 - support_h) * inv_h_scale - 0.5), 0)
+    oh_start = tl.maximum(_f2i((ih_f + 0.5 - support_h) * inv_h_scale - 0.5), 0)
 
     # Vector: which ow values contribute to each iw
-    ow_starts = tl.maximum(
-        _f2i((iw_f + 0.5 - support_w) * inv_w_scale - 0.5), 0)
+    ow_starts = tl.maximum(_f2i((iw_f + 0.5 - support_w) * inv_w_scale - 0.5), 0)
 
     go_nc_base = nc.to(tl.int64) * stride_go_nc
 
@@ -75,7 +81,7 @@ def _fused_backward_kernel(
 
     # --- d_ow OUTER loop: wx computed once per d_ow, reused across d_oh ---
     for d_ow in tl.static_range(MAX_OW):
-        ow = ow_starts + d_ow                          # vector
+        ow = ow_starts + d_ow  # vector
         ow_valid_base = iw_mask & (ow >= 0) & (ow < W_out)
 
         # Compute wx (vector) — only once per d_ow
@@ -100,7 +106,7 @@ def _fused_backward_kernel(
 
         # --- d_oh INNER loop: wy is scalar, cheap to recompute ---
         for d_oh in tl.static_range(MAX_OH):
-            oh = oh_start + d_oh                        # scalar
+            oh = oh_start + d_oh  # scalar
             oh_valid = (oh >= 0) & (oh < H_out)
 
             # Compute wy (scalar)
@@ -125,10 +131,12 @@ def _fused_backward_kernel(
             valid = iw_in_range & ih_in_range
             oh_safe = tl.maximum(tl.minimum(oh, H_out - 1), 0)
             g = tl.load(
-                grad_out_ptr + go_nc_base
+                grad_out_ptr
+                + go_nc_base
                 + oh_safe.to(tl.int64) * W_out
                 + ow_safe.to(tl.int64),
-                mask=valid, other=0.0,
+                mask=valid,
+                other=0.0,
             )
             accum += wy * wx * g
 
@@ -143,8 +151,11 @@ def _fused_backward_kernel(
 @triton.jit
 def _precompute_weight_sums_kernel(
     total_w_ptr,
-    output_size, input_size,
-    scale, support, invscale,
+    output_size,
+    input_size,
+    scale,
+    support,
+    invscale,
     MAX_KSIZE: tl.constexpr,
 ):
     oi = tl.program_id(0)
@@ -165,11 +176,15 @@ def _precompute_weight_sums_kernel(
 
 @triton.jit
 def _pass1_w_gather_nchw_kernel(
-    grad_out_ptr,       # [NC, H_out, W_out] flat
-    buf_ptr,            # [NC, H_out, W_in]  flat (output)
-    total_wx_ptr,       # [W_out]
-    W_in, W_out,
-    w_scale, support_w, invscale_w, inv_w_scale,
+    grad_out_ptr,  # [NC, H_out, W_out] flat
+    buf_ptr,  # [NC, H_out, W_in]  flat (output)
+    total_wx_ptr,  # [W_out]
+    W_in,
+    W_out,
+    w_scale,
+    support_w,
+    invscale_w,
+    inv_w_scale,
     BLOCK_IW: tl.constexpr,
     MAX_OW: tl.constexpr,
 ):
@@ -184,8 +199,7 @@ def _pass1_w_gather_nchw_kernel(
     go_base = pid_row.to(tl.int64) * W_out
     buf_base = pid_row.to(tl.int64) * W_in
 
-    ow_starts = tl.maximum(
-        _f2i((iw_f + 0.5 - support_w) * inv_w_scale - 0.5), 0)
+    ow_starts = tl.maximum(_f2i((iw_f + 0.5 - support_w) * inv_w_scale - 0.5), 0)
 
     accum = tl.zeros([BLOCK_IW], dtype=tl.float32)
 
@@ -194,17 +208,18 @@ def _pass1_w_gather_nchw_kernel(
         ow_valid = iw_mask & (ow >= 0) & (ow < W_out)
 
         center_w = w_scale * (ow.to(tl.float32) + 0.5)
-        xmin  = tl.maximum(_f2i(center_w - support_w + 0.5), 0)
+        xmin = tl.maximum(_f2i(center_w - support_w + 0.5), 0)
         xsize = tl.minimum(_f2i(center_w + support_w + 0.5), W_in) - xmin
         in_range = ow_valid & (iws >= xmin) & (iws < xmin + tl.maximum(xsize, 0))
 
-        raw_wx  = _cubic_aa_filter(tl.abs((iw_f - center_w + 0.5) * invscale_w))
+        raw_wx = _cubic_aa_filter(tl.abs((iw_f - center_w + 0.5) * invscale_w))
         ow_safe = tl.maximum(tl.minimum(ow, W_out - 1), 0)
-        tw_x    = tl.load(total_wx_ptr + ow_safe, mask=in_range, other=1.0)
-        wx      = tl.where(in_range & (tw_x != 0.0), raw_wx / tw_x, 0.0)
+        tw_x = tl.load(total_wx_ptr + ow_safe, mask=in_range, other=1.0)
+        wx = tl.where(in_range & (tw_x != 0.0), raw_wx / tw_x, 0.0)
 
-        g = tl.load(grad_out_ptr + go_base + ow_safe.to(tl.int64),
-                     mask=in_range, other=0.0)
+        g = tl.load(
+            grad_out_ptr + go_base + ow_safe.to(tl.int64), mask=in_range, other=0.0
+        )
         accum += wx * g
 
     tl.store(buf_ptr + buf_base + iws.to(tl.int64), accum, mask=iw_mask)
@@ -212,12 +227,17 @@ def _pass1_w_gather_nchw_kernel(
 
 @triton.jit
 def _pass2_h_gather_nchw_kernel(
-    buf_ptr,            # [NC, H_out, W_in] flat (input)
-    grad_in_ptr,        # [NC, H_in,  W_in] flat (output)
-    total_wy_ptr,       # [H_out]
-    H_in, W_in, H_out,
-    h_scale, support_h, invscale_h, inv_h_scale,
-    stride_buf_hw,      # = H_out * W_in
+    buf_ptr,  # [NC, H_out, W_in] flat (input)
+    grad_in_ptr,  # [NC, H_in,  W_in] flat (output)
+    total_wy_ptr,  # [H_out]
+    H_in,
+    W_in,
+    H_out,
+    h_scale,
+    support_h,
+    invscale_h,
+    inv_h_scale,
+    stride_buf_hw,  # = H_out * W_in
     BLOCK_IW: tl.constexpr,
     MAX_OH: tl.constexpr,
 ):
@@ -225,15 +245,14 @@ def _pass2_h_gather_nchw_kernel(
     pid_col = tl.program_id(1)
 
     nc = pid_row // H_in
-    ih = pid_row %  H_in
+    ih = pid_row % H_in
     ih_f = ih.to(tl.float32)
 
     iw_base = pid_col * BLOCK_IW
     iws = iw_base + tl.arange(0, BLOCK_IW)
     iw_mask = iws < W_in
 
-    oh_start = tl.maximum(
-        _f2i((ih_f + 0.5 - support_h) * inv_h_scale - 0.5), 0)
+    oh_start = tl.maximum(_f2i((ih_f + 0.5 - support_h) * inv_h_scale - 0.5), 0)
 
     buf_nc_base = nc.to(tl.int64) * stride_buf_hw
 
@@ -244,14 +263,14 @@ def _pass2_h_gather_nchw_kernel(
         oh_valid = (oh >= 0) & (oh < H_out)
 
         center_h = h_scale * (oh + 0.5)
-        ymin  = tl.maximum(_f2i(center_h - support_h + 0.5), 0)
+        ymin = tl.maximum(_f2i(center_h - support_h + 0.5), 0)
         ysize = tl.minimum(_f2i(center_h + support_h + 0.5), H_in) - ymin
         ih_in_range = oh_valid & (ih >= ymin) & (ih < ymin + tl.maximum(ysize, 0))
 
-        raw_wy  = _cubic_aa_filter(tl.abs((ih_f - center_h + 0.5) * invscale_h))
+        raw_wy = _cubic_aa_filter(tl.abs((ih_f - center_h + 0.5) * invscale_h))
         oh_safe = tl.maximum(tl.minimum(oh, H_out - 1), 0)
-        tw_y    = tl.load(total_wy_ptr + oh_safe)
-        wy      = tl.where(ih_in_range & (tw_y != 0.0), raw_wy / tw_y, 0.0)
+        tw_y = tl.load(total_wy_ptr + oh_safe)
+        wy = tl.where(ih_in_range & (tw_y != 0.0), raw_wy / tw_y, 0.0)
 
         buf_off = buf_nc_base + oh_safe.to(tl.int64) * W_in + iws.to(tl.int64)
         b = tl.load(buf_ptr + buf_off, mask=iw_mask & ih_in_range, other=0.0)
@@ -270,20 +289,23 @@ def _compute_scale(input_size, output_size, align_corners, scale=None):
     if align_corners:
         return float(input_size - 1) / (output_size - 1) if output_size > 1 else 0.0
     else:
-        return (1.0 / scale) if (scale is not None and scale > 0) \
+        return (
+            (1.0 / scale)
+            if (scale is not None and scale > 0)
             else float(input_size) / output_size
+        )
 
 
 # Threshold: when total elements (across the larger of input / output spatial)
 # is below this, the fused single-kernel path is used (1 launch instead of 4).
 # Above this, the 2-pass separable path is more memory-bandwidth efficient.
-_FUSE_THRESHOLD = 1 << 20       # 1M elements
+_FUSE_THRESHOLD = 1 << 20  # 1M elements
 
 
 def _upsample_bicubic2d_aa_backward(
     grad_output: torch.Tensor,
-    output_size,        # [H_out, W_out]
-    input_size,         # [N, C, H_in, W_in]
+    output_size,  # [H_out, W_out]
+    input_size,  # [N, C, H_in, W_in]
     align_corners: bool,
     scales_h=None,
     scales_w=None,
@@ -337,18 +359,31 @@ def _upsample_bicubic2d_aa_backward(
         # ============================================================
         # FUSED PATH — single kernel launch, no intermediate buffer
         # ============================================================
-        grad_in_flat = torch.empty(NC, H_in, W_in, dtype=grad_output.dtype,
-                                   device=grad_output.device)
+        grad_in_flat = torch.empty(
+            NC, H_in, W_in, dtype=grad_output.dtype, device=grad_output.device
+        )
         grid = (NC * H_in, triton.cdiv(W_in, BLOCK_IW))
         _fused_backward_kernel[grid](
-            grad_out_flat, grad_in_flat,
-            H_in, H_out,
-            h_scale, support_h, invscale_h, inv_h_scale,
-            W_in, W_out,
-            w_scale, support_w, invscale_w, inv_w_scale,
-            H_out * W_out,          # stride_go_nc
-            BLOCK_IW=BLOCK_IW, MAX_OH=MAX_OH, MAX_OW=MAX_OW,
-            MAX_KSIZE_H=MAX_KSIZE_H, MAX_KSIZE_W=MAX_KSIZE_W,
+            grad_out_flat,
+            grad_in_flat,
+            H_in,
+            H_out,
+            h_scale,
+            support_h,
+            invscale_h,
+            inv_h_scale,
+            W_in,
+            W_out,
+            w_scale,
+            support_w,
+            invscale_w,
+            inv_w_scale,
+            H_out * W_out,  # stride_go_nc
+            BLOCK_IW=BLOCK_IW,
+            MAX_OH=MAX_OH,
+            MAX_OW=MAX_OW,
+            MAX_KSIZE_H=MAX_KSIZE_H,
+            MAX_KSIZE_W=MAX_KSIZE_W,
             num_warps=nw,
         )
         return grad_in_flat.reshape(N, C, H_in, W_in)
@@ -359,43 +394,73 @@ def _upsample_bicubic2d_aa_backward(
         # ============================================================
 
         # Phase 0: precompute weight sums
-        total_wy = torch.empty(max(H_out, 1), dtype=torch.float32,
-                               device=grad_output.device)
-        total_wx = torch.empty(max(W_out, 1), dtype=torch.float32,
-                               device=grad_output.device)
+        total_wy = torch.empty(
+            max(H_out, 1), dtype=torch.float32, device=grad_output.device
+        )
+        total_wx = torch.empty(
+            max(W_out, 1), dtype=torch.float32, device=grad_output.device
+        )
         if H_out > 0:
             _precompute_weight_sums_kernel[(H_out,)](
-                total_wy, H_out, H_in, h_scale, support_h, invscale_h,
-                MAX_KSIZE=MAX_KSIZE_H)
+                total_wy,
+                H_out,
+                H_in,
+                h_scale,
+                support_h,
+                invscale_h,
+                MAX_KSIZE=MAX_KSIZE_H,
+            )
         if W_out > 0:
             _precompute_weight_sums_kernel[(W_out,)](
-                total_wx, W_out, W_in, w_scale, support_w, invscale_w,
-                MAX_KSIZE=MAX_KSIZE_W)
+                total_wx,
+                W_out,
+                W_in,
+                w_scale,
+                support_w,
+                invscale_w,
+                MAX_KSIZE=MAX_KSIZE_W,
+            )
 
         # Phase 1: W-gather -> buf [NC, H_out, W_in]
-        buf = torch.empty(NC, H_out, W_in, dtype=torch.float32,
-                          device=grad_output.device)
+        buf = torch.empty(
+            NC, H_out, W_in, dtype=torch.float32, device=grad_output.device
+        )
         grid1 = (NC * H_out, triton.cdiv(W_in, BLOCK_IW))
         _pass1_w_gather_nchw_kernel[grid1](
-            grad_out_flat, buf, total_wx,
-            W_in, W_out,
-            w_scale, support_w, invscale_w, inv_w_scale,
-            BLOCK_IW=BLOCK_IW, MAX_OW=MAX_OW,
+            grad_out_flat,
+            buf,
+            total_wx,
+            W_in,
+            W_out,
+            w_scale,
+            support_w,
+            invscale_w,
+            inv_w_scale,
+            BLOCK_IW=BLOCK_IW,
+            MAX_OW=MAX_OW,
             num_warps=nw,
         )
 
         # Phase 2: H-gather -> grad_in [NC, H_in, W_in]
-        grad_in_flat = torch.empty(NC, H_in, W_in, dtype=grad_output.dtype,
-                                   device=grad_output.device)
+        grad_in_flat = torch.empty(
+            NC, H_in, W_in, dtype=grad_output.dtype, device=grad_output.device
+        )
         grid2 = (NC * H_in, triton.cdiv(W_in, BLOCK_IW))
         _pass2_h_gather_nchw_kernel[grid2](
-            buf, grad_in_flat, total_wy,
-            H_in, W_in, H_out,
-            h_scale, support_h, invscale_h, inv_h_scale,
-            H_out * W_in,           # stride_buf_hw
-            BLOCK_IW=BLOCK_IW, MAX_OH=MAX_OH,
+            buf,
+            grad_in_flat,
+            total_wy,
+            H_in,
+            W_in,
+            H_out,
+            h_scale,
+            support_h,
+            invscale_h,
+            inv_h_scale,
+            H_out * W_in,  # stride_buf_hw
+            BLOCK_IW=BLOCK_IW,
+            MAX_OH=MAX_OH,
             num_warps=nw,
         )
 
         return grad_in_flat.reshape(N, C, H_in, W_in)
-
