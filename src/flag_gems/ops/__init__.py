@@ -1,6 +1,7 @@
 from flag_gems.ops._functional_sym_constrain_range_for_size import (
     _functional_sym_constrain_range_for_size,
 )
+from flag_gems.ops._safe_softmax import _safe_softmax
 from flag_gems.ops.abs import abs, abs_
 from flag_gems.ops.absolute import absolute
 from flag_gems.ops.acos import acos
@@ -11,11 +12,13 @@ from flag_gems.ops.addcmul import addcmul
 from flag_gems.ops.addmm import addmm, addmm_out
 from flag_gems.ops.addmv import addmv, addmv_out
 from flag_gems.ops.addr import addr
+from flag_gems.ops.alias_copy import alias_copy, alias_copy_out
 from flag_gems.ops.all import all, all_dim, all_dims
 from flag_gems.ops.amax import amax
 from flag_gems.ops.angle import angle
 from flag_gems.ops.any import any, any_dim, any_dims
 from flag_gems.ops.arange import arange, arange_start
+from flag_gems.ops.arcsinh import arcsinh, arcsinh_out
 from flag_gems.ops.argmax import argmax
 from flag_gems.ops.argmin import argmin
 from flag_gems.ops.atan import atan, atan_
@@ -73,6 +76,7 @@ from flag_gems.ops.cumsum import cumsum, cumsum_out, normed_cumsum
 from flag_gems.ops.diag import diag
 from flag_gems.ops.diag_embed import diag_embed
 from flag_gems.ops.diagonal import diagonal_backward
+from flag_gems.ops.digamma_ import digamma_
 from flag_gems.ops.div import (
     div_mode,
     div_mode_,
@@ -115,6 +119,7 @@ from flag_gems.ops.get_scheduler_metadata import get_scheduler_metadata
 from flag_gems.ops.glu import glu, glu_backward
 from flag_gems.ops.groupnorm import group_norm, group_norm_backward
 from flag_gems.ops.gt import gt, gt_scalar
+from flag_gems.ops.hardsigmoid import hardsigmoid, hardsigmoid_out
 from flag_gems.ops.hardswish_ import hardswish_
 from flag_gems.ops.hstack import hstack
 from flag_gems.ops.hypot import hypot, hypot_out
@@ -187,6 +192,7 @@ from flag_gems.ops.per_token_group_quant_fp8 import (
     SUPPORTED_FP8_DTYPE,
     per_token_group_quant_fp8,
 )
+from flag_gems.ops.pixel_unshuffle import pixel_unshuffle, pixel_unshuffle_out
 from flag_gems.ops.polar import polar
 from flag_gems.ops.pow import (
     pow_scalar,
@@ -204,6 +210,7 @@ from flag_gems.ops.randn import randn
 from flag_gems.ops.randn_like import randn_like
 from flag_gems.ops.randperm import randperm
 from flag_gems.ops.reciprocal import reciprocal, reciprocal_
+from flag_gems.ops.reflection_pad2d import reflection_pad2d, reflection_pad2d_out
 from flag_gems.ops.relu import relu, relu_
 from flag_gems.ops.relu6 import relu6
 from flag_gems.ops.repeat import repeat
@@ -223,6 +230,7 @@ from flag_gems.ops.scaled_softmax import scaled_softmax_backward, scaled_softmax
 from flag_gems.ops.scatter import scatter, scatter_
 from flag_gems.ops.scatter_add_ import scatter_add_
 from flag_gems.ops.select_scatter import select_scatter
+from flag_gems.ops.selu import selu
 from flag_gems.ops.selu_ import selu_
 from flag_gems.ops.sgn_ import sgn_
 from flag_gems.ops.sigmoid import sigmoid, sigmoid_, sigmoid_backward
@@ -234,6 +242,7 @@ from flag_gems.ops.slice_scatter import slice_scatter
 from flag_gems.ops.softmax import softmax, softmax_backward
 from flag_gems.ops.softplus import softplus
 from flag_gems.ops.sort import sort, sort_stable
+from flag_gems.ops.special_i1 import special_i1, special_i1_out
 from flag_gems.ops.sqrt import sqrt, sqrt_
 from flag_gems.ops.stack import stack
 from flag_gems.ops.std import std
@@ -262,6 +271,7 @@ from flag_gems.ops.var_mean import var_mean
 from flag_gems.ops.vdot import vdot
 from flag_gems.ops.vector_norm import vector_norm
 from flag_gems.ops.vstack import vstack
+from flag_gems.ops.w8a8_block_fp8_matmul import w8a8_block_fp8_matmul
 from flag_gems.ops.weightnorm import (
     weight_norm_interface,
     weight_norm_interface_backward,
@@ -279,6 +289,7 @@ from flag_gems.ops.zeros_like import zeros_like
 __all__ = [
     "_conv_depthwise2d",
     "_functional_sym_constrain_range_for_size",
+    "_safe_softmax",
     "_unique2",
     "_upsample_bicubic2d_aa",
     "abs",
@@ -295,6 +306,8 @@ __all__ = [
     "addmv",
     "addmv_out",
     "addr",
+    "alias_copy",
+    "alias_copy_out",
     "all",
     "all_dim",
     "all_dims",
@@ -306,6 +319,8 @@ __all__ = [
     "any_dims",
     "arange",
     "arange_start",
+    "arcsinh",
+    "arcsinh_out",
     "argmax",
     "argmin",
     "atan",
@@ -360,6 +375,7 @@ __all__ = [
     "diag",
     "diag_embed",
     "diagonal_backward",
+    "digamma_",
     "div_mode",
     "div_mode_",
     "dot",
@@ -413,6 +429,8 @@ __all__ = [
     "group_norm_backward",
     "gt",
     "gt_scalar",
+    "hardsigmoid",
+    "hardsigmoid_out",
     "hardswish_",
     "hstack",
     "hypot",
@@ -502,6 +520,8 @@ __all__ = [
     "one_hot",
     "pad",
     "per_token_group_quant_fp8",
+    "pixel_unshuffle",
+    "pixel_unshuffle_out",
     "polar",
     "pow_scalar",
     "pow_tensor_scalar",
@@ -519,6 +539,8 @@ __all__ = [
     "randperm",
     "reciprocal",
     "reciprocal_",
+    "reflection_pad2d",
+    "reflection_pad2d_out",
     "relu",
     "relu_",
     "relu6",
@@ -548,6 +570,7 @@ __all__ = [
     "scatter_",
     "scatter_add_",
     "select_scatter",
+    "selu",
     "selu_",
     "sgn_",
     "sigmoid",
@@ -566,6 +589,8 @@ __all__ = [
     "softplus",
     "sort",
     "sort_stable",
+    "special_i1",
+    "special_i1_out",
     "sqrt",
     "sqrt_",
     "stack",
@@ -609,6 +634,7 @@ __all__ = [
     "vdot",
     "vector_norm",
     "vstack",
+    "w8a8_block_fp8_matmul",
     "weight_norm_interface",
     "weight_norm_interface_backward",
     "where_scalar_other",
