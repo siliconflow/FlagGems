@@ -128,7 +128,7 @@ def adaptive_avg_pool2d_kernel(
 
 
 def adaptive_avg_pool2d(input: torch.Tensor, output_size):
-    logger.debug("GEMS ADAPTIVE_AVG_POOL2D FORWARD")
+    logger.debug("GEMS ADAPTIVE_AVG_POOL2D")
 
     input = input.contiguous()
 
