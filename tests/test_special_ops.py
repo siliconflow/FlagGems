@@ -2855,7 +2855,7 @@ def test_upsample_bicubic2d_aa_backward(
 
     gems_assert_close(res_out, ref_out, dtype, atol=atol)
 
-    
+
 def normalize_1d_shape(shape):
     if len(shape) == 1:
         return (1, 1, shape[0])
