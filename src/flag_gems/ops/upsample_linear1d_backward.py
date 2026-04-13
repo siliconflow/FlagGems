@@ -101,7 +101,6 @@ def upsample_linear1d_backward(
     scale_factors=None,
 ) -> torch.Tensor:
     logger.debug("GEMS UPSAMPLE_LINEAR1D_BACKWARD")
-    assert grad_output.is_cuda
 
     if len(input_size) == 3:
         n, c, in_w = input_size
