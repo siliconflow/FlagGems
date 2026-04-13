@@ -1524,9 +1524,16 @@ def test_perf_functional_sym_constrain_range_for_size():
 
 class UpsampleLinear1dBackwardBenchmark(Benchmark):
     def set_more_shapes(self):
-        shapes = [(512 * 1024 * 1024,), (512, 1024, 1024)]
-        shapes_3d = [(4, 16, 2**i) for i in range(4, 14, 2)]
-        shapes_2d = [(16, 2**i) for i in range(6, 16, 2)]
+        shapes = [
+            (512 * 1024 * 1024,),
+            (512, 1024, 1024),
+        ]  # Stress tests: massive 1D and large 3D tensors to verify memory limits and index overflow handling
+        shapes_3d = [
+            (4, 16, 2**i) for i in range(4, 14, 2)
+        ]  # 3D scalability: pow-of-2 spatial dimensions to test boundary conditions and indexing accuracy across sizes
+        shapes_2d = [
+            (16, 2**i) for i in range(6, 16, 2)
+        ]  # 2D scalability: larger pow-of-2 spatial dimensions to test scaling limits efficiently without OOM
         return shapes + shapes_3d + shapes_2d
 
     def get_input_iter(self, cur_dtype):
