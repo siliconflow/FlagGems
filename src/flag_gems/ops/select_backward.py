@@ -4,6 +4,32 @@ import torch
 import triton
 import triton.language as tl
 
+@triton.jit
+def _cuda_select_backward_kernel(
+    grad_ptr,
+    out_ptr,
+    outer_size,
+    inner_size,
+    dim_stride,
+    index,
+    BLOCK: tl.constexpr,
+):
+    pid = tl.program_id(0)
+
+    offs = pid * BLOCK + tl.arange(0, BLOCK)
+    total = outer_size * inner_size
+
+    mask = offs < total
+
+    outer = offs // inner_size
+    inner = offs % inner_size
+
+    grad_vals = tl.load(grad_ptr + outer * inner_size + inner, mask=mask)
+
+    out_offset = outer * dim_stride + index * inner_size + inner
+
+    tl.store(out_ptr + out_offset, grad_vals, mask=mask)
+
 
 @triton.jit
 def _select_backward_kernel(
@@ -183,23 +209,6 @@ def _launch_select_backward(grad, input_sizes, dim, index, out=None):
     is_cuda = _is_cuda_device(grad)
     is_ascend = _is_ascend_device(grad)
 
-    # CUDA小shape：用一个fused kernel完成清零和写回，避免zero_+copy_两次调度。
-    # 这主要修CUDA上[64]->[64,64]、[1024]->[1024,1]、[64,1]->[64,64,1]这类小shape。
-    if is_cuda and out_numel <= 4096:
-        BLOCK = 1024
-        grid = (triton.cdiv(out_numel, BLOCK),)
-
-        _select_backward_fused_kernel[grid](
-            grad_view,
-            out,
-            out_numel,
-            inner_size,
-            dim_size,
-            index,
-            BLOCK=BLOCK,
-        )
-        return out
-
     # 非CUDA小shape：保守走zero_+select.copy_。
     # Ascend上fused小shape之前容易拖慢精度测试和性能测试，所以不默认启用。
     if out_numel <= 4096:
@@ -286,5 +295,68 @@ def _launch_select_backward(grad, input_sizes, dim, index, out=None):
     return out
 
 
+def _cuda_launch_select_backward(grad, input_sizes, dim, index, out=None):
+    if not grad.is_cuda:
+        raise ValueError("grad must be CUDA tensor")
+
+    dim = int(dim)
+    index = int(index)
+
+    sizes = list(input_sizes)
+    ndim = len(sizes)
+
+    if dim < 0:
+        dim += ndim
+
+    if dim < 0 or dim >= ndim:
+        raise ValueError("invalid dim")
+
+    dim_size = sizes[dim]
+
+    if index < 0 or index >= dim_size:
+        raise ValueError("index out of range")
+
+    outer_size = math.prod(sizes[:dim]) if dim > 0 else 1
+    inner_size = math.prod(sizes[dim + 1 :]) if dim < ndim - 1 else 1
+
+    grad_view = grad.contiguous().view(outer_size, inner_size)
+
+    if out is None:
+        out = torch.zeros(
+            sizes,
+            dtype=grad.dtype,
+            device=grad.device,
+        )
+    else:
+        if tuple(out.shape) != tuple(sizes):
+            raise ValueError("out shape mismatch")
+        if out.dtype != grad.dtype:
+            raise ValueError("dtype mismatch")
+        if out.device != grad.device:
+            raise ValueError("device mismatch")
+
+        out.zero_()
+
+    dim_stride = dim_size * inner_size
+
+    BLOCK = 1024
+    n_elements = outer_size * inner_size
+    grid = (triton.cdiv(n_elements, BLOCK),)
+
+    _cuda_select_backward_kernel[grid](
+        grad_view,
+        out,
+        outer_size,
+        inner_size,
+        dim_stride,
+        index,
+        BLOCK=BLOCK,
+    )
+
+    return out
+
+
 def select_backward(grad, input_sizes, dim, index, out=None):
+    if _is_cuda_device(grad):
+        return _cuda_launch_select_backward(grad, input_sizes, dim, index, out=out)
     return _launch_select_backward(grad, input_sizes, dim, index, out=out)
