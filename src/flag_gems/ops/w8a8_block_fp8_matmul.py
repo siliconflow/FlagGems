@@ -1,5 +1,4 @@
 import functools
-import json
 import logging
 import os
 from typing import Any, Dict, List, Optional
@@ -7,8 +6,32 @@ from typing import Any, Dict, List, Optional
 import torch
 import triton
 import triton.language as tl
+import yaml
+
+import flag_gems
 
 logger = logging.getLogger(__name__)
+
+
+def _get_default_w8a8_block_fp8_config(block_n: int, block_k: int) -> Dict[str, Any]:
+    if flag_gems.device != "cuda":
+        return {
+            "BLOCK_SIZE_M": 64,
+            "BLOCK_SIZE_N": 64,
+            "BLOCK_SIZE_K": 128,
+            "GROUP_SIZE_M": 4,
+            "num_warps": 4,
+            "num_stages": 3,
+        }
+
+    return {
+        "BLOCK_SIZE_M": 64,
+        "BLOCK_SIZE_N": block_n,
+        "BLOCK_SIZE_K": block_k,
+        "GROUP_SIZE_M": 32,
+        "num_warps": 4,
+        "num_stages": 2,
+    }
 
 
 @triton.jit
@@ -67,7 +90,6 @@ def w8a8_block_fp8_matmul_kernel(
         offs_ks = k_start // group_k
         a_s = tl.load(As_ptrs + offs_ks * stride_As_k)
         b_s = tl.load(Bs_ptrs + offs_ks * stride_Bs_k)
-
         accumulator += tl.dot(a, b) * a_s[:, None] * b_s[None, :]
         a_ptrs += BLOCK_SIZE_K * stride_ak
         b_ptrs += BLOCK_SIZE_K * stride_bk
@@ -90,27 +112,49 @@ def w8a8_block_fp8_matmul_kernel(
 def get_w8a8_block_fp8_configs(
     N: int, K: int, block_n: int, block_k: int
 ) -> Optional[Dict[int, Any]]:
+    if not torch.cuda.is_available():
+        logger.debug(
+            "CUDA is unavailable on this backend; using default W8A8 block FP8 config."
+        )
+        return None
+
     device_name = torch.cuda.get_device_name().replace(" ", "_")
-    json_file_name = (
-        f"N={N},K={K},device_name={device_name},"
-        f"dtype=fp8_w8a8,block_shape=[{block_n},{block_k}].json"
-    )
+    name_parts = device_name.split("_")
+    if any(part.startswith("H20") for part in name_parts):
+        device_name = "NVIDIA_H20"
+    file_name = f"fp8_w8a8-{block_n}-{block_k}.yaml"
 
     config_dir = os.path.join(os.path.dirname(__file__), "..", "utils", "configs")
-    config_file_path = os.path.join(config_dir, json_file_name)
+    cfg_file = os.path.join(config_dir, file_name)
 
-    if os.path.exists(config_file_path):
-        with open(config_file_path) as f:
+    if os.path.exists(cfg_file):
+        with open(cfg_file) as f:
             logger.info(
-                "Using configuration from %s for W8A8 Block FP8 kernel.",
-                config_file_path,
+                "Using config from %s for W8A8 block FP8 kernel.",
+                cfg_file,
             )
-            return {int(key): val for key, val in json.load(f).items()}
+            dev_data = yaml.safe_load(f).get(device_name, {})
+            NK_data = dev_data.get(f"{N},{K}", {})
+
+            result = {}
+            for k, p in NK_data.items():
+                # unpack the list into dictionary
+                result[int(k)] = {
+                    "BLOCK_SIZE_M": p[0],
+                    "BLOCK_SIZE_N": p[1],
+                    "BLOCK_SIZE_K": p[2],
+                    "GROUP_SIZE_M": p[3],
+                    "num_warps": p[4],
+                    "num_stages": p[5],
+                }
+            if not result:
+                return None
+            return result
 
     logger.warning(
         "Using default W8A8 Block FP8 kernel config. Performance might "
         "be sub-optimal! Config file not found at %s",
-        config_file_path,
+        cfg_file,
     )
     return None
 
@@ -121,7 +165,7 @@ def w8a8_block_fp8_matmul(
     As: torch.Tensor,
     Bs: torch.Tensor,
     block_size: List[int],
-    output_dtype: torch.dtype = torch.float16,
+    output_dtype: torch.dtype = torch.bfloat16,
 ) -> torch.Tensor:
     assert len(block_size) == 2
     block_n, block_k = block_size[0], block_size[1]
@@ -143,14 +187,7 @@ def w8a8_block_fp8_matmul(
     if configs:
         config = configs[min(configs.keys(), key=lambda x: abs(x - M))]
     else:
-        config = {
-            "BLOCK_SIZE_M": 64,
-            "BLOCK_SIZE_N": block_size[0],
-            "BLOCK_SIZE_K": block_size[1],
-            "GROUP_SIZE_M": 32,
-            "num_warps": 4,
-            "num_stages": 2,
-        }
+        config = _get_default_w8a8_block_fp8_config(block_n, block_k)
 
     def grid(META):
         return (
