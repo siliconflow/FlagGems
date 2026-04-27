@@ -187,11 +187,6 @@ def _launch_select_backward(grad, input_sizes, dim, index, out=None):
 
     total = outer_size * inner_size
 
-    if not grad.is_contiguous():
-        grad = grad.contiguous()
-
-    grad_view = grad.view(total)
-
     if out is None:
         out = torch.empty(
             sizes,
@@ -231,6 +226,11 @@ def _launch_select_backward(grad, input_sizes, dim, index, out=None):
 
     if total == 0:
         return out
+
+    if not grad.is_contiguous():
+        grad = grad.contiguous()
+
+    grad_view = grad.view(total)
 
     # dim=0：写回区域是完整连续块。
     if dim == 0:
