@@ -92,89 +92,27 @@ def _select_backward_lastdim_kernel(
     tl.store(out_ptr + out_offset, vals, mask=mask)
 
 
-@triton.jit
-def _select_backward_mid_large_inner_kernel(
-    grad_ptr,
-    out_ptr,
-    inner_size: tl.constexpr,
-    dim_size: tl.constexpr,
-    index: tl.constexpr,
-    BLOCK_INNER: tl.constexpr,
-):
-    pid_outer = tl.program_id(0)
-    pid_inner = tl.program_id(1)
-
-    inner = pid_inner * BLOCK_INNER + tl.arange(0, BLOCK_INNER)
-    mask = inner < inner_size
-
-    grad_offset = pid_outer * inner_size + inner
-    out_offset = (pid_outer * dim_size + index) * inner_size + inner
-
-    vals = tl.load(grad_ptr + grad_offset, mask=mask)
-    tl.store(out_ptr + out_offset, vals, mask=mask)
-
-
-@triton.jit
-def _select_backward_fused_kernel(
-    grad_ptr,
-    out_ptr,
-    out_numel: tl.constexpr,
-    inner_size: tl.constexpr,
-    dim_size: tl.constexpr,
-    index: tl.constexpr,
-    BLOCK: tl.constexpr,
-):
-    pid = tl.program_id(0)
-
-    offs = pid * BLOCK + tl.arange(0, BLOCK)
-    mask = offs < out_numel
-
-    inner = offs % inner_size
-    tmp = offs // inner_size
-    dim_idx = tmp % dim_size
-    outer = tmp // dim_size
-
-    selected = dim_idx == index
-    grad_offset = outer * inner_size + inner
-
-    vals = tl.load(
-        grad_ptr + grad_offset,
-        mask=mask & selected,
-        other=0.0,
-    )
-    vals = tl.where(selected, vals, 0.0)
-
-    tl.store(out_ptr + offs, vals, mask=mask)
-
-
-def _is_cuda_device(grad):
-    return grad.device.type == "cuda"
-
-
-def _is_ascend_device(grad):
-    # torch_npu一般是npu；如果你的环境里device.type不是npu，可以在这里补充。
-    return grad.device.type == "npu"
-
-
 def _ascend_launch_select_backward(grad, input_sizes, dim, index, out=None):
     dim = int(dim)
     index = int(index)
 
-    sizes = list(input_sizes)
+    sizes = tuple(input_sizes)
     ndim = len(sizes)
 
     if dim < 0:
         dim += ndim
-
-    if dim < 0 or dim >= ndim:
+        if dim < 0:
+            raise ValueError("invalid dim")
+    elif dim >= ndim:
         raise ValueError("invalid dim")
 
     dim_size = int(sizes[dim])
 
     if index < 0:
         index += dim_size
-
-    if index < 0 or index >= dim_size:
+        if index < 0:
+            raise ValueError("index out of range")
+    elif index >= dim_size:
         raise ValueError("index out of range")
 
     if out is None:
@@ -184,7 +122,7 @@ def _ascend_launch_select_backward(grad, input_sizes, dim, index, out=None):
             device=grad.device,
         )
     else:
-        if tuple(out.shape) != tuple(sizes):
+        if out.shape != sizes:
             raise ValueError("out shape mismatch")
         if out.dtype != grad.dtype:
             raise ValueError("dtype mismatch")
@@ -202,21 +140,23 @@ def _launch_select_backward(grad, input_sizes, dim, index, out=None):
     dim = int(dim)
     index = int(index)
 
-    sizes = list(input_sizes)
+    sizes = tuple(input_sizes)
     ndim = len(sizes)
 
     if dim < 0:
         dim += ndim
-
-    if dim < 0 or dim >= ndim:
+        if dim < 0:
+            raise ValueError("invalid dim")
+    elif dim >= ndim:
         raise ValueError("invalid dim")
 
     dim_size = int(sizes[dim])
 
     if index < 0:
         index += dim_size
-
-    if index < 0 or index >= dim_size:
+        if index < 0:
+            raise ValueError("index out of range")
+    elif index >= dim_size:
         raise ValueError("index out of range")
 
     outer_size = math.prod(sizes[:dim]) if dim > 0 else 1
@@ -236,7 +176,7 @@ def _launch_select_backward(grad, input_sizes, dim, index, out=None):
             device=grad.device,
         )
     else:
-        if tuple(out.shape) != tuple(sizes):
+        if out.shape != sizes:
             raise ValueError("out shape mismatch")
         if out.dtype != grad.dtype:
             raise ValueError("dtype mismatch")
@@ -310,19 +250,17 @@ def _launch_select_backward(grad, input_sizes, dim, index, out=None):
 
 
 def _cuda_launch_select_backward(grad, input_sizes, dim, index, out=None):
-    if not grad.is_cuda:
-        raise ValueError("grad must be CUDA tensor")
-
     dim = int(dim)
     index = int(index)
 
-    sizes = list(input_sizes)
+    sizes = tuple(input_sizes)
     ndim = len(sizes)
 
     if dim < 0:
         dim += ndim
-
-    if dim < 0 or dim >= ndim:
+        if dim < 0:
+            raise ValueError("invalid dim")
+    elif dim >= ndim:
         raise ValueError("invalid dim")
 
     dim_size = sizes[dim]
@@ -342,7 +280,7 @@ def _cuda_launch_select_backward(grad, input_sizes, dim, index, out=None):
             device=grad.device,
         )
     else:
-        if tuple(out.shape) != tuple(sizes):
+        if out.shape != sizes:
             raise ValueError("out shape mismatch")
         if out.dtype != grad.dtype:
             raise ValueError("dtype mismatch")
@@ -371,9 +309,8 @@ def _cuda_launch_select_backward(grad, input_sizes, dim, index, out=None):
 
 
 def select_backward(grad, input_sizes, dim, index, out=None):
-    device_type = grad.device.type
-    if device_type == "npu":
+    if grad.device.type == "npu":
         return _ascend_launch_select_backward(grad, input_sizes, dim, index, out=out)
-    if device_type == "cuda":
+    if grad.is_cuda:
         return _cuda_launch_select_backward(grad, input_sizes, dim, index, out=out)
     return _launch_select_backward(grad, input_sizes, dim, index, out=out)
