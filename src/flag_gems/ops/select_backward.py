@@ -156,6 +156,48 @@ def _is_ascend_device(grad):
     return grad.device.type == "npu"
 
 
+def _ascend_launch_select_backward(grad, input_sizes, dim, index, out=None):
+    dim = int(dim)
+    index = int(index)
+
+    sizes = list(input_sizes)
+    ndim = len(sizes)
+
+    if dim < 0:
+        dim += ndim
+
+    if dim < 0 or dim >= ndim:
+        raise ValueError("invalid dim")
+
+    dim_size = int(sizes[dim])
+
+    if index < 0:
+        index += dim_size
+
+    if index < 0 or index >= dim_size:
+        raise ValueError("index out of range")
+
+    if out is None:
+        out = torch.empty(
+            sizes,
+            dtype=grad.dtype,
+            device=grad.device,
+        )
+    else:
+        if tuple(out.shape) != tuple(sizes):
+            raise ValueError("out shape mismatch")
+        if out.dtype != grad.dtype:
+            raise ValueError("dtype mismatch")
+        if out.device != grad.device:
+            raise ValueError("device mismatch")
+
+    # Ascend 910B: CANN's native zero + strided copy is faster than launching
+    # a Triton scatter kernel for this op.
+    out.zero_()
+    out.select(dim, index).copy_(grad)
+    return out
+
+
 def _launch_select_backward(grad, input_sizes, dim, index, out=None):
     dim = int(dim)
     index = int(index)
@@ -201,21 +243,7 @@ def _launch_select_backward(grad, input_sizes, dim, index, out=None):
         if out.device != grad.device:
             raise ValueError("device mismatch")
 
-    is_cuda = _is_cuda_device(grad)
-    is_ascend = _is_ascend_device(grad)
-
-    # Ascend 910B: CANN's native zero + strided copy is consistently faster
-    # than launching a separate Triton scatter kernel for this op.  The
-    # benchmark harness excludes FlagGems zero_, so this dispatches to the
-    # optimized torch_npu zero path there while still preserving correctness
-    # under a full use_gems() registration.
-    if is_ascend:
-        out.zero_()
-        out.select(dim, index).copy_(grad)
-        return out
-
     # 非CUDA小shape：保守走zero_+select.copy_。
-    # Ascend上fused小shape之前容易拖慢精度测试和性能测试，所以不默认启用。
     if out_numel <= 4096:
         out.zero_()
         out.select(dim, index).copy_(grad)
@@ -262,32 +290,8 @@ def _launch_select_backward(grad, input_sizes, dim, index, out=None):
         )
         return out
 
-    # Ascend专用：修复outer较小、inner很大的中间维度大块写回。
-    # 典型case：
-    # grad=[64,4096], input=[64,64,4096], dim=1, index=32
-    # CUDA上通用kernel已经很好，所以这里不要给CUDA启用，避免反向拖慢。
-    if (
-        is_ascend
-        and inner_size >= 4096
-        and outer_size <= 128
-        and dim_size <= 128
-    ):
-        BLOCK_INNER = 1024
-        grid = (outer_size, triton.cdiv(inner_size, BLOCK_INNER))
-
-        _select_backward_mid_large_inner_kernel[grid](
-            grad_view,
-            out,
-            inner_size,
-            dim_size,
-            index,
-            BLOCK_INNER=BLOCK_INNER,
-        )
-        return out
-
     # 默认通用路径。
     # CUDA上这个路径对inner_size=16/256/512/1024/4096都表现很好；
-    # Ascend上除了inner_size特别大的case，其余也相对稳定。
     BLOCK = 1024
     grid = (triton.cdiv(total, BLOCK),)
     dim_stride = dim_size * inner_size
@@ -367,6 +371,9 @@ def _cuda_launch_select_backward(grad, input_sizes, dim, index, out=None):
 
 
 def select_backward(grad, input_sizes, dim, index, out=None):
-    if _is_cuda_device(grad):
+    device_type = grad.device.type
+    if device_type == "npu":
+        return _ascend_launch_select_backward(grad, input_sizes, dim, index, out=out)
+    if device_type == "cuda":
         return _cuda_launch_select_backward(grad, input_sizes, dim, index, out=out)
     return _launch_select_backward(grad, input_sizes, dim, index, out=out)
