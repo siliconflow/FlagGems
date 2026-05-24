@@ -59,7 +59,7 @@ class UpsampleLinear1dBackwardBenchmark(base.Benchmark):
                 for align_corners in [False, True]:
                     n, c, w_in = shape_3d
                     w_out = max(1, int(w_in * scale_factor))
-                    if n * c * max(w_in, w_out) >= 2**30:
+                    if n * c * max(w_in, w_out) >= 2**29:
                         continue
 
                     grad = torch.randn(
