@@ -1,11 +1,28 @@
+import contextlib
 import os
 
 import torch
 import triton
 import triton.language as tl
 
-# Enable all blocks parallel to avoid coreDim > 65535 issue on NPU
-os.environ["TRITON_ALL_BLOCKS_PARALLEL"] = "1"
+
+@contextlib.contextmanager
+def _all_blocks_parallel():
+    # Sparse-attention's 1D grid can exceed NPU coreDim==65535; the
+    # TRITON_ALL_BLOCKS_PARALLEL=1 workaround is required for *this* kernel,
+    # but leaving it on globally changes Triton-Ascend runtime semantics for
+    # unrelated kernels (it currently corrupts tl.atomic_add). Scope it to
+    # the launch and restore the previous value afterwards.
+    key = "TRITON_ALL_BLOCKS_PARALLEL"
+    prev = os.environ.get(key)
+    os.environ[key] = "1"
+    try:
+        yield
+    finally:
+        if prev is None:
+            os.environ.pop(key, None)
+        else:
+            os.environ[key] = prev
 
 
 # ---------------------------------------------------------------------------
@@ -165,35 +182,36 @@ def sparse_attn_triton(
     # NPU: use 1D grid, TRITON_ALL_BLOCKS_PARALLEL handles large grid
     grid = (b * m,)
 
-    sparse_attn_triton_kernel[grid](
-        q,
-        kv,
-        o,
-        attn_sink,
-        topk_idxs,
-        q.stride(0),
-        q.stride(1),
-        q.stride(2),
-        q.stride(3),
-        kv.stride(0),
-        kv.stride(1),
-        kv.stride(2),
-        o.stride(0),
-        o.stride(1),
-        o.stride(2),
-        o.stride(3),
-        topk_idxs.stride(0),
-        topk_idxs.stride(1),
-        topk_idxs.stride(2),
-        softmax_scale,
-        topk,
-        kv_len,
-        h,
-        BLOCK=BLOCK,
-        BLOCK_SUB=BLOCK_SUB,
-        D=d,
-        H=H_padded,
-        BATCH_STRIDE=m,  # for 1D grid: pid = pid_b * m + pid_m
-        num_warps=4,  # reduced for NPU
-    )
+    with _all_blocks_parallel():
+        sparse_attn_triton_kernel[grid](
+            q,
+            kv,
+            o,
+            attn_sink,
+            topk_idxs,
+            q.stride(0),
+            q.stride(1),
+            q.stride(2),
+            q.stride(3),
+            kv.stride(0),
+            kv.stride(1),
+            kv.stride(2),
+            o.stride(0),
+            o.stride(1),
+            o.stride(2),
+            o.stride(3),
+            topk_idxs.stride(0),
+            topk_idxs.stride(1),
+            topk_idxs.stride(2),
+            softmax_scale,
+            topk,
+            kv_len,
+            h,
+            BLOCK=BLOCK,
+            BLOCK_SUB=BLOCK_SUB,
+            D=d,
+            H=H_padded,
+            BATCH_STRIDE=m,  # for 1D grid: pid = pid_b * m + pid_m
+            num_warps=4,  # reduced for NPU
+        )
     return o
