@@ -339,6 +339,23 @@ def _unique_dim_inverse_kernel(
 
 @libentry()
 @triton.jit
+def _unique_dim_inverse_small_kernel(
+    sorted_indices_ptr: tl.tensor,
+    is_first_ptr: tl.tensor,
+    inverse_ptr: tl.tensor,
+    num_rows: int,
+    BLOCK_SIZE: tl.constexpr,
+):
+    offsets = tl.arange(0, BLOCK_SIZE)
+    mask = offsets < num_rows
+    is_first = tl.load(is_first_ptr + offsets, mask=mask, other=0).to(tl.int64)
+    inverse_sorted = tl.cumsum(is_first, axis=0) - 1
+    sorted_indices = tl.load(sorted_indices_ptr + offsets, mask=mask, other=0)
+    tl.store(inverse_ptr + sorted_indices, inverse_sorted, mask=mask)
+
+
+@libentry()
+@triton.jit
 def _unique_dim_counts_kernel(
     first_positions_ptr: tl.tensor,
     counts_ptr: tl.tensor,
@@ -748,10 +765,23 @@ def _unique_dim_inverse(
     is_first: torch.Tensor,
 ) -> torch.Tensor:
     num_rows = sorted_indices.numel()
-    inverse_in_sorted = torch.cumsum(is_first.to(torch.int64), dim=0) - 1
     inverse_indices = torch.empty(
         num_rows, dtype=torch.int64, device=sorted_indices.device
     )
+    if num_rows <= _UNIQUE_DIM_GROUP_SCAN_BLOCK_SIZE:
+        block_size = triton.next_power_of_2(num_rows)
+        with torch_device_fn.device(sorted_indices.device.index):
+            _unique_dim_inverse_small_kernel[(1, 1, 1)](
+                sorted_indices,
+                is_first,
+                inverse_indices,
+                num_rows,
+                BLOCK_SIZE=block_size,
+                num_warps=_triton_num_warps(block_size),
+            )
+        return inverse_indices
+
+    inverse_in_sorted = torch.cumsum(is_first.to(torch.int64), dim=0) - 1
     grid = (triton.cdiv(num_rows, _UNIQUE_DIM_GATHER_BLOCK_SIZE), 1, 1)
     with torch_device_fn.device(sorted_indices.device.index):
         _unique_dim_inverse_kernel[grid](
