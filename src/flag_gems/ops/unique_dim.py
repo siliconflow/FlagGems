@@ -78,13 +78,41 @@ def _unique_dim_radix_hist_kernel(
 
 @libentry()
 @triton.jit
+def _unique_dim_radix_prefix_kernel(
+    hist_ptr: tl.tensor,
+    block_prefix_ptr: tl.tensor,
+    bin_counts_ptr: tl.tensor,
+    num_blocks: int,
+    BLOCK_BLOCKS: tl.constexpr,
+    RADIX_SIZE: tl.constexpr,
+):
+    bin_id = ext.program_id(0)
+    blocks = tl.arange(0, BLOCK_BLOCKS)
+    mask = blocks < num_blocks
+
+    counts = tl.load(
+        hist_ptr + blocks * RADIX_SIZE + bin_id,
+        mask=mask,
+        other=0,
+    )
+    block_prefix = tl.cumsum(counts, axis=0) - counts
+    tl.store(
+        block_prefix_ptr + blocks * RADIX_SIZE + bin_id,
+        block_prefix,
+        mask=mask,
+    )
+    tl.store(bin_counts_ptr + bin_id, tl.sum(counts, axis=0))
+
+
+@libentry()
+@triton.jit
 def _unique_dim_radix_scatter_kernel(
     keys_in_ptr: tl.tensor,
     indices_in_ptr: tl.tensor,
     keys_out_ptr: tl.tensor,
     indices_out_ptr: tl.tensor,
     block_prefix_ptr: tl.tensor,
-    bin_offsets_ptr: tl.tensor,
+    bin_counts_ptr: tl.tensor,
     num_keys: int,
     bit_offset: int,
     BLOCK_SIZE: tl.constexpr,
@@ -98,15 +126,35 @@ def _unique_dim_radix_scatter_kernel(
     keys = tl.load(keys_in_ptr + offsets, mask=mask, other=0)
     indices = tl.load(indices_in_ptr + offsets, mask=mask, other=0)
     digits = ((keys >> bit_offset) & RADIX_MASK).to(tl.int32)
+    bins = tl.arange(0, RADIX_SIZE)
+    bin_counts = tl.load(bin_counts_ptr + bins)
+    bin_offsets = tl.cumsum(bin_counts, axis=0) - bin_counts
 
     for bin_id in tl.static_range(0, RADIX_SIZE):
         matches = (digits == bin_id) & mask
         local_rank = tl.cumsum(matches.to(tl.int64), axis=0) - matches.to(tl.int64)
         block_prefix = tl.load(block_prefix_ptr + block * RADIX_SIZE + bin_id)
-        bin_offset = tl.load(bin_offsets_ptr + bin_id)
+        bin_offset = tl.sum(tl.where(bins == bin_id, bin_offsets, 0), axis=0)
         positions = bin_offset + block_prefix + local_rank
         tl.store(keys_out_ptr + positions, keys, mask=matches)
         tl.store(indices_out_ptr + positions, indices, mask=matches)
+
+
+@libentry()
+@triton.jit
+def _unique_dim_gather_1d_kernel(
+    input_ptr: tl.tensor,
+    index_ptr: tl.tensor,
+    output_ptr: tl.tensor,
+    num_elements: int,
+    BLOCK_SIZE: tl.constexpr,
+):
+    pid = ext.program_id(0)
+    offsets = pid * BLOCK_SIZE + tl.arange(0, BLOCK_SIZE)
+    mask = offsets < num_elements
+    indices = tl.load(index_ptr + offsets, mask=mask, other=0)
+    values = tl.load(input_ptr + indices, mask=mask)
+    tl.store(output_ptr + offsets, values, mask=mask)
 
 
 @libentry()
@@ -336,6 +384,24 @@ def _monotonic_int64_column(flat: torch.Tensor, col: int) -> torch.Tensor:
     raise NotImplementedError(dt)
 
 
+def _triton_gather_1d(values: torch.Tensor, indices: torch.Tensor) -> torch.Tensor:
+    num_elements = indices.numel()
+    output = torch.empty(num_elements, dtype=values.dtype, device=values.device)
+    if num_elements == 0:
+        return output
+    grid = (triton.cdiv(num_elements, _UNIQUE_DIM_GATHER_BLOCK_SIZE), 1, 1)
+    with torch_device_fn.device(values.device.index):
+        _unique_dim_gather_1d_kernel[grid](
+            values,
+            indices,
+            output,
+            num_elements,
+            BLOCK_SIZE=_UNIQUE_DIM_GATHER_BLOCK_SIZE,
+            num_warps=4,
+        )
+    return output
+
+
 def _lex_argsort_rows_composite(flat: torch.Tensor) -> torch.Tensor:
     """Lex-sort rows by packing ``(group_id, monotonic_key)`` per column.
 
@@ -360,15 +426,19 @@ def _lex_argsort_rows_composite(flat: torch.Tensor) -> torch.Tensor:
     key_scale = 1 << key_bits
 
     for col in range(num_cols):
-        keys = _monotonic_int64_column(flat, col).index_select(0, indices)
+        column_keys = _monotonic_int64_column(flat, col)
+        keys = column_keys if col == 0 else _triton_gather_1d(column_keys, indices)
         # Use ``group_id * scale + keys`` rather than ``(group_id << bits) | keys``.
         # Functionally identical because ``keys`` is in ``[0, scale)`` after the
         # monotonic remap, but the multiply/add path avoids the int64 bitwise
         # kernels that some Ascend/NPU backends do not provide.
         composite = group_id * key_scale + keys
-        perm = _triton_argsort_1d(composite, nonnegative_int64=True)
-        indices = indices.index_select(0, perm)
-        composite = composite.index_select(0, perm)
+        perm, composite = _triton_argsort_1d(
+            composite,
+            nonnegative_int64=True,
+            return_sorted=True,
+        )
+        indices = _triton_gather_1d(indices, perm)
         # When running under FlagGems' op interception, the registered int64
         # tensor-vs-tensor comparison ops (and the bool dtype cast) route
         # through float32 and lose precision around 2**24, silently mapping
@@ -387,12 +457,15 @@ def _lex_argsort_rows_composite(flat: torch.Tensor) -> torch.Tensor:
     return indices
 
 
-def _triton_radix_argsort_nonnegative_int64(keys: torch.Tensor) -> torch.Tensor:
+def _triton_radix_argsort_nonnegative_int64(
+    keys: torch.Tensor,
+    return_sorted: bool = False,
+):
     """Stable LSD radix argsort for non-negative int64 composite keys."""
     num_keys = keys.numel()
     indices = torch.arange(num_keys, dtype=torch.int64, device=keys.device)
     if num_keys <= 1:
-        return indices
+        return (indices, keys) if return_sorted else indices
 
     keys_in = torch.clone(keys.contiguous())
     keys_out = torch.empty_like(keys_in)
@@ -403,6 +476,9 @@ def _triton_radix_argsort_nonnegative_int64(keys: torch.Tensor) -> torch.Tensor:
     radix_mask = radix_size - 1
     num_blocks = triton.cdiv(num_keys, _UNIQUE_DIM_RADIX_BLOCK_SIZE)
     hist = torch.empty((num_blocks, radix_size), dtype=torch.int64, device=keys.device)
+    block_prefix = torch.empty_like(hist)
+    bin_counts = torch.empty(radix_size, dtype=torch.int64, device=keys.device)
+    prefix_block_size = triton.next_power_of_2(num_blocks)
     num_passes = _unique_dim_radix_num_passes(keys_in)
 
     with torch_device_fn.device(keys.device.index):
@@ -418,16 +494,22 @@ def _triton_radix_argsort_nonnegative_int64(keys: torch.Tensor) -> torch.Tensor:
                 RADIX_MASK=radix_mask,
                 num_warps=4,
             )
-            block_prefix = torch.cumsum(hist, dim=0) - hist
-            bin_counts = hist.sum(dim=0)
-            bin_offsets = torch.cumsum(bin_counts, dim=0) - bin_counts
+            _unique_dim_radix_prefix_kernel[(radix_size, 1, 1)](
+                hist,
+                block_prefix,
+                bin_counts,
+                num_blocks,
+                BLOCK_BLOCKS=prefix_block_size,
+                RADIX_SIZE=radix_size,
+                num_warps=_triton_num_warps(prefix_block_size),
+            )
             _unique_dim_radix_scatter_kernel[(num_blocks, 1, 1)](
                 keys_in,
                 indices_in,
                 keys_out,
                 indices_out,
                 block_prefix,
-                bin_offsets,
+                bin_counts,
                 num_keys,
                 bit_offset,
                 BLOCK_SIZE=_UNIQUE_DIM_RADIX_BLOCK_SIZE,
@@ -437,21 +519,30 @@ def _triton_radix_argsort_nonnegative_int64(keys: torch.Tensor) -> torch.Tensor:
             )
             keys_in, keys_out = keys_out, keys_in
             indices_in, indices_out = indices_out, indices_in
+    if return_sorted:
+        return indices_in, keys_in
     return indices_in
 
 
-def _triton_argsort_1d(keys: torch.Tensor, nonnegative_int64: bool = False) -> torch.Tensor:
+def _triton_argsort_1d(
+    keys: torch.Tensor,
+    nonnegative_int64: bool = False,
+    return_sorted: bool = False,
+) -> torch.Tensor:
     """Stable ascending argsort. Composite int64 keys use a Triton radix path."""
     num_keys = keys.numel()
     indices = torch.empty(num_keys, dtype=torch.int64, device=keys.device)
     if num_keys == 0:
-        return indices
+        return (indices, keys) if return_sorted else indices
     if (
         nonnegative_int64
         and keys.dtype == torch.int64
         and num_keys > _UNIQUE_DIM_RANK_SORT_MAX_KEYS
     ):
-        return _triton_radix_argsort_nonnegative_int64(keys)
+        return _triton_radix_argsort_nonnegative_int64(
+            keys,
+            return_sorted=return_sorted,
+        )
 
     block_size = triton.next_power_of_2(num_keys)
     with torch_device_fn.device(keys.device.index):
@@ -462,6 +553,8 @@ def _triton_argsort_1d(keys: torch.Tensor, nonnegative_int64: bool = False) -> t
             BLOCK_SIZE=block_size,
             num_warps=_triton_num_warps(block_size),
         )
+    if return_sorted:
+        return indices, _triton_gather_1d(keys.contiguous(), indices)
     return indices
 
 
@@ -475,9 +568,9 @@ def _lex_argsort_rows_cascade(flat: torch.Tensor) -> torch.Tensor:
         return indices
     flat_t = flat.t().contiguous()
     for col in range(num_cols - 1, -1, -1):
-        keys = flat_t[col].index_select(0, indices)
+        keys = _triton_gather_1d(flat_t[col], indices)
         perm = _triton_argsort_1d(keys)
-        indices = indices.index_select(0, perm)
+        indices = _triton_gather_1d(indices, perm)
     return indices
 
 
