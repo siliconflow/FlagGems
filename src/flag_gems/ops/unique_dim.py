@@ -301,6 +301,31 @@ def _unique_dim_row_diff_reduce_kernel(
 
 @libentry()
 @triton.jit
+def _unique_dim_row_single_chunk_first_kernel(
+    flat_ptr: tl.tensor,
+    sorted_indices_ptr: tl.tensor,
+    is_first_ptr: tl.tensor,
+    num_rows: int,
+    row_len: int,
+    BLOCK_SIZE: tl.constexpr,
+):
+    row = ext.program_id(0)
+    offsets = tl.arange(0, BLOCK_SIZE)
+    mask = offsets < row_len
+
+    out = tl.full((), True, dtype=tl.int1)
+    if row != 0:
+        cur_row = tl.load(sorted_indices_ptr + row)
+        prev_row = tl.load(sorted_indices_ptr + row - 1)
+        cur = tl.load(flat_ptr + cur_row * row_len + offsets, mask=mask)
+        prev = tl.load(flat_ptr + prev_row * row_len + offsets, mask=mask)
+        neq = (cur != prev) & mask
+        out = tl.sum(neq.to(tl.int32), axis=0) != 0
+    tl.store(is_first_ptr + row, out)
+
+
+@libentry()
+@triton.jit
 def _unique_dim_gather_moved_kernel(
     flat_ptr: tl.tensor,
     unique_indices_ptr: tl.tensor,
@@ -704,10 +729,23 @@ def _unique_dim_first_mask(flat: torch.Tensor, sorted_indices: torch.Tensor):
 
     block_size = min(_UNIQUE_DIM_COMPARE_BLOCK_SIZE, triton.next_power_of_2(row_len))
     num_chunks = triton.cdiv(row_len, block_size)
+    is_first = torch.empty(num_rows, dtype=torch.bool, device=flat.device)
+    if num_chunks == 1:
+        with torch_device_fn.device(flat.device.index):
+            _unique_dim_row_single_chunk_first_kernel[(num_rows, 1, 1)](
+                flat,
+                sorted_indices,
+                is_first,
+                num_rows,
+                row_len,
+                BLOCK_SIZE=block_size,
+                num_warps=_triton_num_warps(block_size),
+            )
+        return is_first
+
     row_chunk_diff = torch.empty(
         (num_rows, num_chunks), dtype=torch.int32, device=flat.device
     )
-    is_first = torch.empty(num_rows, dtype=torch.bool, device=flat.device)
     grid = (num_rows, num_chunks, 1)
     row_hash = (
         _unique_dim_row_hash(flat) if row_len >= _UNIQUE_DIM_HASH_MIN_ROW_LEN else None
