@@ -356,6 +356,26 @@ def _unique_dim_inverse_small_kernel(
 
 @libentry()
 @triton.jit
+def _unique_dim_unique_indices_small_kernel(
+    sorted_indices_ptr: tl.tensor,
+    is_first_ptr: tl.tensor,
+    unique_indices_ptr: tl.tensor,
+    num_unique_ptr: tl.tensor,
+    num_rows: int,
+    BLOCK_SIZE: tl.constexpr,
+):
+    offsets = tl.arange(0, BLOCK_SIZE)
+    mask = offsets < num_rows
+    is_first = tl.load(is_first_ptr + offsets, mask=mask, other=0).to(tl.int64)
+    positions = tl.cumsum(is_first, axis=0) - 1
+    sorted_indices = tl.load(sorted_indices_ptr + offsets, mask=mask, other=0)
+    tl.store(unique_indices_ptr + positions, sorted_indices, mask=mask & (is_first != 0))
+    num_unique = tl.sum(tl.where(mask, is_first, 0), axis=0)
+    tl.store(num_unique_ptr, num_unique)
+
+
+@libentry()
+@triton.jit
 def _unique_dim_counts_kernel(
     first_positions_ptr: tl.tensor,
     counts_ptr: tl.tensor,
@@ -795,6 +815,30 @@ def _unique_dim_inverse(
     return inverse_indices
 
 
+def _unique_dim_unique_indices(
+    sorted_indices: torch.Tensor,
+    is_first: torch.Tensor,
+) -> torch.Tensor:
+    num_rows = sorted_indices.numel()
+    if num_rows <= _UNIQUE_DIM_GROUP_SCAN_BLOCK_SIZE:
+        unique_indices_full = torch.empty_like(sorted_indices)
+        num_unique_tensor = torch.empty((), dtype=torch.int64, device=sorted_indices.device)
+        block_size = triton.next_power_of_2(num_rows)
+        with torch_device_fn.device(sorted_indices.device.index):
+            _unique_dim_unique_indices_small_kernel[(1, 1, 1)](
+                sorted_indices,
+                is_first,
+                unique_indices_full,
+                num_unique_tensor,
+                num_rows,
+                BLOCK_SIZE=block_size,
+                num_warps=_triton_num_warps(block_size),
+            )
+        return unique_indices_full[: num_unique_tensor.item()]
+
+    return sorted_indices.masked_select(is_first)
+
+
 def _unique_dim_counts(
     is_first: torch.Tensor,
     num_rows: int,
@@ -866,7 +910,7 @@ def unique_dim(
 
     is_first = _unique_dim_first_mask(flat, sorted_indices)
 
-    unique_in_orig = sorted_indices.masked_select(is_first)
+    unique_in_orig = _unique_dim_unique_indices(sorted_indices, is_first)
     output = _unique_dim_gather_output(moved, unique_in_orig, dim, input.shape)
 
     inverse_indices = torch.empty(0, dtype=torch.int64, device=device)
