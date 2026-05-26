@@ -12,6 +12,7 @@ logger = logging.getLogger(__name__)
 
 _UNIQUE_DIM_COMPARE_BLOCK_SIZE = 1024
 _UNIQUE_DIM_GATHER_BLOCK_SIZE = 1024
+_UNIQUE_DIM_GROUP_SCAN_BLOCK_SIZE = 4096
 _UNIQUE_DIM_RANK_SORT_MAX_KEYS = 4096
 _UNIQUE_DIM_RADIX_BLOCK_SIZE = 512
 _UNIQUE_DIM_RADIX_BITS = 4
@@ -155,6 +156,28 @@ def _unique_dim_gather_1d_kernel(
     indices = tl.load(index_ptr + offsets, mask=mask, other=0)
     values = tl.load(input_ptr + indices, mask=mask)
     tl.store(output_ptr + offsets, values, mask=mask)
+
+
+@libentry()
+@triton.jit
+def _unique_dim_group_id_kernel(
+    composite_ptr: tl.tensor,
+    group_id_ptr: tl.tensor,
+    last_group_id_ptr: tl.tensor,
+    num_rows: int,
+    BLOCK_SIZE: tl.constexpr,
+):
+    offsets = tl.arange(0, BLOCK_SIZE)
+    mask = offsets < num_rows
+    cur = tl.load(composite_ptr + offsets, mask=mask, other=0)
+    prev_offsets = tl.where(offsets == 0, 0, offsets - 1)
+    prev = tl.load(composite_ptr + prev_offsets, mask=offsets > 0, other=cur)
+    diff = ((cur - prev) != 0) & mask
+    diff = tl.where(offsets == 0, False, diff)
+    group_id = tl.cumsum(diff.to(tl.int64), axis=0)
+    tl.store(group_id_ptr + offsets, group_id, mask=mask)
+    last = tl.sum(tl.where(offsets == num_rows - 1, group_id, 0), axis=0)
+    tl.store(last_group_id_ptr, last)
 
 
 @libentry()
@@ -402,6 +425,26 @@ def _triton_gather_1d(values: torch.Tensor, indices: torch.Tensor) -> torch.Tens
     return output
 
 
+def _triton_group_id_from_sorted_composite(composite: torch.Tensor):
+    num_rows = composite.numel()
+    group_id = torch.empty(num_rows, dtype=torch.int64, device=composite.device)
+    last_group_id = torch.empty((), dtype=torch.int64, device=composite.device)
+    if num_rows == 0:
+        return group_id, last_group_id
+
+    block_size = triton.next_power_of_2(num_rows)
+    with torch_device_fn.device(composite.device.index):
+        _unique_dim_group_id_kernel[(1, 1, 1)](
+            composite,
+            group_id,
+            last_group_id,
+            num_rows,
+            BLOCK_SIZE=block_size,
+            num_warps=_triton_num_warps(block_size),
+        )
+    return group_id, last_group_id
+
+
 def _lex_argsort_rows_composite(flat: torch.Tensor) -> torch.Tensor:
     """Lex-sort rows by packing ``(group_id, monotonic_key)`` per column.
 
@@ -444,16 +487,22 @@ def _lex_argsort_rows_composite(flat: torch.Tensor) -> torch.Tensor:
         # through float32 and lose precision around 2**24, silently mapping
         # non-equal composite values to ``False``. ``int64 - int64`` followed
         # by tensor-vs-scalar ``ne 0`` is the path that stays exact.
-        diff = ((composite[1:] - composite[:-1]) != 0).to(torch.int64)
-        group_id = torch.cat(
-            [
-                torch.zeros(1, dtype=torch.int64, device=device),
-                torch.cumsum(diff, dim=0),
-            ]
-        )
-        # Early termination: every row has a unique lex prefix already.
-        if group_id[-1].item() == num_rows - 1:
-            break
+        if num_rows <= _UNIQUE_DIM_GROUP_SCAN_BLOCK_SIZE:
+            group_id, last_group_id = _triton_group_id_from_sorted_composite(composite)
+            # Early termination: every row has a unique lex prefix already.
+            if last_group_id.item() == num_rows - 1:
+                break
+        else:
+            diff = ((composite[1:] - composite[:-1]) != 0).to(torch.int64)
+            group_id = torch.cat(
+                [
+                    torch.zeros(1, dtype=torch.int64, device=device),
+                    torch.cumsum(diff, dim=0),
+                ]
+            )
+            # Early termination: every row has a unique lex prefix already.
+            if group_id[-1].item() == num_rows - 1:
+                break
     return indices
 
 
