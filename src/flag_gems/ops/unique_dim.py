@@ -19,7 +19,19 @@ _UNIQUE_DIM_RADIX_BITS = 4
 _UNIQUE_DIM_HASH_MIN_ROW_LEN = 1024
 _UNIQUE_DIM_FUSED_ALL_UNIQUE_MAX_ELEMENTS = 1 << 20
 _UNIQUE_DIM_STRIDED_DIM1_FAST_MAX_ELEMENTS = 1 << 20
-_UNIQUE_DIM_ASCEND_PREFIX_RANK_MAX_KEYS = 1024
+_UNIQUE_DIM_DEFAULT_PREFIX_RANK_MAX_KEYS = 1024
+_UNIQUE_DIM_PREFIX_RANK_MAX_KEYS_BY_DEVICE = {
+    "cuda": _UNIQUE_DIM_RANK_SORT_MAX_KEYS,
+}
+_UNIQUE_DIM_TWO_COL_RANK_MAX_KEYS_BY_DEVICE = {
+    "cuda": _UNIQUE_DIM_RANK_SORT_MAX_KEYS,
+}
+_UNIQUE_DIM_FUSED_ALL_UNIQUE_MAX_ELEMENTS_BY_DEVICE = {
+    "cuda": _UNIQUE_DIM_FUSED_ALL_UNIQUE_MAX_ELEMENTS,
+}
+_UNIQUE_DIM_STRIDED_DIM1_FAST_MAX_ELEMENTS_BY_DEVICE = {
+    "cuda": _UNIQUE_DIM_STRIDED_DIM1_FAST_MAX_ELEMENTS,
+}
 
 
 # Per-column bit budgets and to-int64 conversions that preserve the original
@@ -36,6 +48,43 @@ _INT_DTYPE_BITS = {
     torch.bfloat16: 16,
     torch.float32: 32,
 }
+
+
+def _unique_dim_limit_for_device(
+    tensor: torch.Tensor,
+    limits: dict[str, int],
+    default: int = 0,
+) -> int:
+    return limits.get(tensor.device.type, default)
+
+
+def _unique_dim_prefix_rank_max_keys(tensor: torch.Tensor) -> int:
+    return _unique_dim_limit_for_device(
+        tensor,
+        _UNIQUE_DIM_PREFIX_RANK_MAX_KEYS_BY_DEVICE,
+        _UNIQUE_DIM_DEFAULT_PREFIX_RANK_MAX_KEYS,
+    )
+
+
+def _unique_dim_two_col_rank_max_keys(tensor: torch.Tensor) -> int:
+    return _unique_dim_limit_for_device(
+        tensor,
+        _UNIQUE_DIM_TWO_COL_RANK_MAX_KEYS_BY_DEVICE,
+    )
+
+
+def _unique_dim_fused_all_unique_max_elements(tensor: torch.Tensor) -> int:
+    return _unique_dim_limit_for_device(
+        tensor,
+        _UNIQUE_DIM_FUSED_ALL_UNIQUE_MAX_ELEMENTS_BY_DEVICE,
+    )
+
+
+def _unique_dim_strided_dim1_fast_max_elements(tensor: torch.Tensor) -> int:
+    return _unique_dim_limit_for_device(
+        tensor,
+        _UNIQUE_DIM_STRIDED_DIM1_FAST_MAX_ELEMENTS_BY_DEVICE,
+    )
 
 
 @libentry()
@@ -631,7 +680,9 @@ def _triton_num_warps(block_size: int) -> int:
 
 def _unique_dim_radix_num_passes(keys: torch.Tensor) -> int:
     max_key = keys.max().item()
-    return max(1, triton.cdiv(max(1, int(max_key).bit_length()), _UNIQUE_DIM_RADIX_BITS))
+    return max(
+        1, triton.cdiv(max(1, int(max_key).bit_length()), _UNIQUE_DIM_RADIX_BITS)
+    )
 
 
 def _monotonic_key_bits(dtype: torch.dtype):
@@ -664,9 +715,7 @@ def _monotonic_int64_column(flat: torch.Tensor, col: int) -> torch.Tensor:
     if dt == torch.float32:
         as_int = col_data.view(torch.int32).to(torch.int64) & 0xFFFFFFFF
         sign_set = (as_int & 0x80000000) != 0
-        return torch.where(
-            sign_set, as_int ^ 0xFFFFFFFF, as_int ^ 0x80000000
-        )
+        return torch.where(sign_set, as_int ^ 0xFFFFFFFF, as_int ^ 0x80000000)
     raise NotImplementedError(dt)
 
 
@@ -689,11 +738,7 @@ def _triton_first_col_argsort(
         key_offset is None
         or row_len == 0
         or num_rows == 0
-        or num_rows > _UNIQUE_DIM_RANK_SORT_MAX_KEYS
-        or (
-            values.device.type != "cuda"
-            and num_rows > _UNIQUE_DIM_ASCEND_PREFIX_RANK_MAX_KEYS
-        )
+        or num_rows > _unique_dim_prefix_rank_max_keys(values)
     ):
         return None
 
@@ -725,11 +770,10 @@ def _triton_two_col_argsort_int16(
     col_stride: int,
 ):
     if (
-        values.device.type != "cuda"
-        or values.dtype != torch.int16
+        values.dtype != torch.int16
         or row_len < 2
         or num_rows == 0
-        or num_rows > _UNIQUE_DIM_RANK_SORT_MAX_KEYS
+        or num_rows > _unique_dim_two_col_rank_max_keys(values)
     ):
         return None
 
@@ -1049,7 +1093,9 @@ def _unique_dim_row_hash(flat: torch.Tensor) -> torch.Tensor:
     num_rows, row_len = flat.shape
     block_size = min(_UNIQUE_DIM_COMPARE_BLOCK_SIZE, triton.next_power_of_2(row_len))
     num_chunks = triton.cdiv(row_len, block_size)
-    chunk_hash = torch.empty((num_rows, num_chunks), dtype=torch.int64, device=flat.device)
+    chunk_hash = torch.empty(
+        (num_rows, num_chunks), dtype=torch.int64, device=flat.device
+    )
     row_hash = torch.empty(num_rows, dtype=torch.int64, device=flat.device)
     with torch_device_fn.device(flat.device.index):
         _unique_dim_row_hash_chunk_kernel[(num_rows, num_chunks, 1)](
@@ -1380,14 +1426,15 @@ def _unique_dim_dim1_2d_all_unique_fast_path(
     return_inverse: bool,
     return_counts: bool,
 ):
+    max_elements = _unique_dim_strided_dim1_fast_max_elements(input)
     if (
-        input.device.type != "cuda"
-        or input.ndim != 2
+        input.ndim != 2
         or input.stride(1) != 1
         or input.dtype not in (torch.int16, torch.int32)
         or input.size(1) == 0
-        or input.size(1) > _UNIQUE_DIM_RANK_SORT_MAX_KEYS
-        or input.numel() > _UNIQUE_DIM_STRIDED_DIM1_FAST_MAX_ELEMENTS
+        or input.size(1) > _unique_dim_prefix_rank_max_keys(input)
+        or max_elements <= 0
+        or input.numel() > max_elements
     ):
         return None
 
@@ -1482,10 +1529,11 @@ def unique_dim(
         unique_in_orig = sorted_indices
         if return_counts:
             counts = torch.ones(size_dim, dtype=torch.int64, device=device)
+        fused_all_unique_max_elements = _unique_dim_fused_all_unique_max_elements(moved)
         if (
-            device.type == "cuda"
-            and return_inverse
-            and moved.numel() <= _UNIQUE_DIM_FUSED_ALL_UNIQUE_MAX_ELEMENTS
+            return_inverse
+            and fused_all_unique_max_elements > 0
+            and moved.numel() <= fused_all_unique_max_elements
         ):
             output, inverse_indices = _unique_dim_gather_all_unique(
                 moved,
