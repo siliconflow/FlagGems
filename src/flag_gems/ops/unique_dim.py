@@ -19,6 +19,7 @@ _UNIQUE_DIM_RADIX_BITS = 4
 _UNIQUE_DIM_HASH_MIN_ROW_LEN = 1024
 _UNIQUE_DIM_FUSED_ALL_UNIQUE_MAX_ELEMENTS = 1 << 20
 _UNIQUE_DIM_STRIDED_DIM1_FAST_MAX_ELEMENTS = 1 << 20
+_UNIQUE_DIM_ASCEND_PREFIX_RANK_MAX_KEYS = 1024
 
 
 # Per-column bit budgets and to-int64 conversions that preserve the original
@@ -689,6 +690,10 @@ def _triton_first_col_argsort(
         or row_len == 0
         or num_rows == 0
         or num_rows > _UNIQUE_DIM_RANK_SORT_MAX_KEYS
+        or (
+            values.device.type != "cuda"
+            and num_rows > _UNIQUE_DIM_ASCEND_PREFIX_RANK_MAX_KEYS
+        )
     ):
         return None
 
@@ -720,7 +725,8 @@ def _triton_two_col_argsort_int16(
     col_stride: int,
 ):
     if (
-        values.dtype != torch.int16
+        values.device.type != "cuda"
+        or values.dtype != torch.int16
         or row_len < 2
         or num_rows == 0
         or num_rows > _UNIQUE_DIM_RANK_SORT_MAX_KEYS
@@ -1375,7 +1381,8 @@ def _unique_dim_dim1_2d_all_unique_fast_path(
     return_counts: bool,
 ):
     if (
-        input.ndim != 2
+        input.device.type != "cuda"
+        or input.ndim != 2
         or input.stride(1) != 1
         or input.dtype not in (torch.int16, torch.int32)
         or input.size(1) == 0
@@ -1475,7 +1482,11 @@ def unique_dim(
         unique_in_orig = sorted_indices
         if return_counts:
             counts = torch.ones(size_dim, dtype=torch.int64, device=device)
-        if return_inverse and moved.numel() <= _UNIQUE_DIM_FUSED_ALL_UNIQUE_MAX_ELEMENTS:
+        if (
+            device.type == "cuda"
+            and return_inverse
+            and moved.numel() <= _UNIQUE_DIM_FUSED_ALL_UNIQUE_MAX_ELEMENTS
+        ):
             output, inverse_indices = _unique_dim_gather_all_unique(
                 moved,
                 sorted_indices,
