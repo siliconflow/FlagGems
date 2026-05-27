@@ -18,6 +18,7 @@ _UNIQUE_DIM_RADIX_BLOCK_SIZE = 512
 _UNIQUE_DIM_RADIX_BITS = 4
 _UNIQUE_DIM_HASH_MIN_ROW_LEN = 1024
 _UNIQUE_DIM_FUSED_ALL_UNIQUE_MAX_ELEMENTS = 1 << 20
+_UNIQUE_DIM_STRIDED_DIM1_FAST_MAX_ELEMENTS = 1 << 20
 
 
 # Per-column bit budgets and to-int64 conversions that preserve the original
@@ -68,6 +69,7 @@ def _unique_dim_first_col_rank_kernel(
     duplicate_flags_ptr: tl.tensor,
     num_rows: int,
     row_len: int,
+    row_stride: int,
     KEY_OFFSET: tl.constexpr,
     BLOCK_SIZE: tl.constexpr,
 ):
@@ -75,9 +77,9 @@ def _unique_dim_first_col_rank_kernel(
     candidates = tl.arange(0, BLOCK_SIZE)
     mask = candidates < num_rows
 
-    cur = tl.load(flat_ptr + row * row_len).to(tl.int64) + KEY_OFFSET
+    cur = tl.load(flat_ptr + row * row_stride).to(tl.int64) + KEY_OFFSET
     vals = (
-        tl.load(flat_ptr + candidates * row_len, mask=mask, other=0).to(tl.int64)
+        tl.load(flat_ptr + candidates * row_stride, mask=mask, other=0).to(tl.int64)
         + KEY_OFFSET
     )
     less = (vals < cur) & mask
@@ -99,6 +101,8 @@ def _unique_dim_two_col_rank_kernel(
     duplicate_flags_ptr: tl.tensor,
     num_rows: int,
     row_len: int,
+    row_stride: int,
+    col_stride: int,
     KEY_OFFSET: tl.constexpr,
     KEY_SCALE: tl.constexpr,
     BLOCK_SIZE: tl.constexpr,
@@ -107,14 +111,18 @@ def _unique_dim_two_col_rank_kernel(
     candidates = tl.arange(0, BLOCK_SIZE)
     mask = candidates < num_rows
 
-    cur_base = row * row_len
+    cur_base = row * row_stride
     cur0 = tl.load(flat_ptr + cur_base).to(tl.int64) + KEY_OFFSET
-    cur1 = tl.load(flat_ptr + cur_base + 1).to(tl.int64) + KEY_OFFSET
+    cur1 = tl.load(flat_ptr + cur_base + col_stride).to(tl.int64) + KEY_OFFSET
     cur = cur0 * KEY_SCALE + cur1
 
-    cand_base = candidates * row_len
+    cand_base = candidates * row_stride
     vals0 = tl.load(flat_ptr + cand_base, mask=mask, other=0).to(tl.int64)
-    vals1 = tl.load(flat_ptr + cand_base + 1, mask=mask, other=0).to(tl.int64)
+    vals1 = tl.load(
+        flat_ptr + cand_base + col_stride,
+        mask=mask,
+        other=0,
+    ).to(tl.int64)
     vals = (vals0 + KEY_OFFSET) * KEY_SCALE + (vals1 + KEY_OFFSET)
 
     less = (vals < cur) & mask
@@ -464,6 +472,36 @@ def _unique_dim_gather_inverse_moved_kernel(
 
 @libentry()
 @triton.jit
+def _unique_dim_gather_inverse_strided_2d_kernel(
+    input_ptr: tl.tensor,
+    sorted_indices_ptr: tl.tensor,
+    output_ptr: tl.tensor,
+    inverse_ptr: tl.tensor,
+    rows: int,
+    cols: int,
+    BLOCK_SIZE: tl.constexpr,
+    STORE_INVERSE: tl.constexpr,
+):
+    pid = ext.program_id(0)
+    offsets = pid * BLOCK_SIZE + tl.arange(0, BLOCK_SIZE)
+    total_elements = rows * cols
+    mask = offsets < total_elements
+
+    row = offsets // cols
+    sorted_col = offsets - row * cols
+    src_col = tl.load(sorted_indices_ptr + sorted_col, mask=mask)
+    values = tl.load(input_ptr + row * cols + src_col, mask=mask)
+    tl.store(output_ptr + offsets, values, mask=mask)
+    if STORE_INVERSE:
+        tl.store(
+            inverse_ptr + src_col,
+            sorted_col.to(tl.int64),
+            mask=mask & (row == 0),
+        )
+
+
+@libentry()
+@triton.jit
 def _unique_dim_inverse_kernel(
     sorted_indices_ptr: tl.tensor,
     inverse_sorted_ptr: tl.tensor,
@@ -639,9 +677,13 @@ def _first_col_key_offset(dtype: torch.dtype):
     return None
 
 
-def _triton_first_col_argsort(flat: torch.Tensor):
-    num_rows, row_len = flat.shape
-    key_offset = _first_col_key_offset(flat.dtype)
+def _triton_first_col_argsort(
+    values: torch.Tensor,
+    num_rows: int,
+    row_len: int,
+    row_stride: int,
+):
+    key_offset = _first_col_key_offset(values.dtype)
     if (
         key_offset is None
         or row_len == 0
@@ -650,18 +692,19 @@ def _triton_first_col_argsort(flat: torch.Tensor):
     ):
         return None
 
-    indices = torch.empty(num_rows, dtype=torch.int64, device=flat.device)
-    group_id = torch.empty(num_rows, dtype=torch.int64, device=flat.device)
-    duplicate_flags = torch.empty(num_rows, dtype=torch.bool, device=flat.device)
+    indices = torch.empty(num_rows, dtype=torch.int64, device=values.device)
+    group_id = torch.empty(num_rows, dtype=torch.int64, device=values.device)
+    duplicate_flags = torch.empty(num_rows, dtype=torch.bool, device=values.device)
     block_size = triton.next_power_of_2(num_rows)
-    with torch_device_fn.device(flat.device.index):
+    with torch_device_fn.device(values.device.index):
         _unique_dim_first_col_rank_kernel[(num_rows, 1, 1)](
-            flat,
+            values,
             indices,
             group_id,
             duplicate_flags,
             num_rows,
             row_len,
+            row_stride,
             KEY_OFFSET=key_offset,
             BLOCK_SIZE=block_size,
             num_warps=_triton_num_warps(block_size),
@@ -669,28 +712,35 @@ def _triton_first_col_argsort(flat: torch.Tensor):
     return indices, group_id, duplicate_flags
 
 
-def _triton_two_col_argsort_int16(flat: torch.Tensor):
-    num_rows, row_len = flat.shape
+def _triton_two_col_argsort_int16(
+    values: torch.Tensor,
+    num_rows: int,
+    row_len: int,
+    row_stride: int,
+    col_stride: int,
+):
     if (
-        flat.dtype != torch.int16
+        values.dtype != torch.int16
         or row_len < 2
         or num_rows == 0
         or num_rows > _UNIQUE_DIM_RANK_SORT_MAX_KEYS
     ):
         return None
 
-    indices = torch.empty(num_rows, dtype=torch.int64, device=flat.device)
-    group_id = torch.empty(num_rows, dtype=torch.int64, device=flat.device)
-    duplicate_flags = torch.empty(num_rows, dtype=torch.bool, device=flat.device)
+    indices = torch.empty(num_rows, dtype=torch.int64, device=values.device)
+    group_id = torch.empty(num_rows, dtype=torch.int64, device=values.device)
+    duplicate_flags = torch.empty(num_rows, dtype=torch.bool, device=values.device)
     block_size = triton.next_power_of_2(num_rows)
-    with torch_device_fn.device(flat.device.index):
+    with torch_device_fn.device(values.device.index):
         _unique_dim_two_col_rank_kernel[(num_rows, 1, 1)](
-            flat,
+            values,
             indices,
             group_id,
             duplicate_flags,
             num_rows,
             row_len,
+            row_stride,
+            col_stride,
             KEY_OFFSET=1 << 15,
             KEY_SCALE=1 << 16,
             BLOCK_SIZE=block_size,
@@ -699,12 +749,24 @@ def _triton_two_col_argsort_int16(flat: torch.Tensor):
     return indices, group_id, duplicate_flags
 
 
-def _triton_prefix_argsort(flat: torch.Tensor):
-    two_col_sort = _triton_two_col_argsort_int16(flat)
+def _triton_prefix_argsort(
+    values: torch.Tensor,
+    num_rows: int,
+    row_len: int,
+    row_stride: int,
+    col_stride: int,
+):
+    two_col_sort = _triton_two_col_argsort_int16(
+        values,
+        num_rows,
+        row_len,
+        row_stride,
+        col_stride,
+    )
     if two_col_sort is not None:
         return *two_col_sort, 2
 
-    first_col_sort = _triton_first_col_argsort(flat)
+    first_col_sort = _triton_first_col_argsort(values, num_rows, row_len, row_stride)
     if first_col_sort is not None:
         return *first_col_sort, 1
     return None
@@ -791,7 +853,13 @@ def _lex_argsort_rows_composite(flat: torch.Tensor):
 
     key_scale = 1 << key_bits
     all_unique = False
-    prefix_sort = _triton_prefix_argsort(flat)
+    prefix_sort = _triton_prefix_argsort(
+        flat,
+        num_rows,
+        num_cols,
+        row_stride=num_cols,
+        col_stride=1,
+    )
     if prefix_sort is None:
         indices = torch.arange(num_rows, dtype=torch.int64, device=device)
         group_id = torch.zeros(num_rows, dtype=torch.int64, device=device)
@@ -1139,6 +1207,37 @@ def _unique_dim_gather_all_unique(
     return moved_output.movedim(0, dim), inverse_indices
 
 
+def _unique_dim_gather_all_unique_strided_2d(
+    input: torch.Tensor,
+    sorted_indices: torch.Tensor,
+    return_inverse: bool,
+) -> tuple[torch.Tensor, torch.Tensor]:
+    rows, cols = input.shape
+    inverse_indices = (
+        torch.empty_like(sorted_indices)
+        if return_inverse
+        else torch.empty(0, dtype=torch.int64, device=input.device)
+    )
+    output = torch.empty_like(input)
+    if rows == 0 or cols == 0:
+        return output, inverse_indices
+
+    grid = (triton.cdiv(output.numel(), _UNIQUE_DIM_GATHER_BLOCK_SIZE), 1, 1)
+    with torch_device_fn.device(input.device.index):
+        _unique_dim_gather_inverse_strided_2d_kernel[grid](
+            input,
+            sorted_indices,
+            output,
+            inverse_indices,
+            rows,
+            cols,
+            BLOCK_SIZE=_UNIQUE_DIM_GATHER_BLOCK_SIZE,
+            STORE_INVERSE=return_inverse,
+            num_warps=4,
+        )
+    return output, inverse_indices
+
+
 def _unique_dim_inverse_from_permutation(sorted_indices: torch.Tensor) -> torch.Tensor:
     num_rows = sorted_indices.numel()
     inverse_indices = torch.empty_like(sorted_indices)
@@ -1270,6 +1369,50 @@ def _unique_dim_counts(
     return counts
 
 
+def _unique_dim_dim1_2d_all_unique_fast_path(
+    input: torch.Tensor,
+    return_inverse: bool,
+    return_counts: bool,
+):
+    if (
+        input.ndim != 2
+        or input.stride(1) != 1
+        or input.dtype not in (torch.int16, torch.int32)
+        or input.size(1) == 0
+        or input.size(1) > _UNIQUE_DIM_RANK_SORT_MAX_KEYS
+        or input.numel() > _UNIQUE_DIM_STRIDED_DIM1_FAST_MAX_ELEMENTS
+    ):
+        return None
+
+    rows, cols = input.shape
+    prefix_sort = _triton_prefix_argsort(
+        input,
+        cols,
+        rows,
+        row_stride=1,
+        col_stride=cols,
+    )
+    if prefix_sort is None:
+        return None
+
+    sorted_indices, _, duplicate_flags, _ = prefix_sort
+    has_duplicate = _triton_any_bool(duplicate_flags)
+    if has_duplicate.item():
+        return None
+
+    output, inverse_indices = _unique_dim_gather_all_unique_strided_2d(
+        input,
+        sorted_indices,
+        return_inverse,
+    )
+    counts = (
+        torch.ones(cols, dtype=torch.int64, device=input.device)
+        if return_counts
+        else torch.empty(0, dtype=torch.int64, device=input.device)
+    )
+    return output, inverse_indices, counts
+
+
 def unique_dim(
     input: torch.Tensor,
     dim: int,
@@ -1310,6 +1453,15 @@ def unique_dim(
             else torch.empty(0, dtype=torch.int64, device=device)
         )
         return output, inverse_indices, counts
+
+    if dim == 1:
+        fast_result = _unique_dim_dim1_2d_all_unique_fast_path(
+            input,
+            return_inverse,
+            return_counts,
+        )
+        if fast_result is not None:
+            return fast_result
 
     moved = input.movedim(dim, 0).contiguous()
     flat = moved.reshape(size_dim, -1)
