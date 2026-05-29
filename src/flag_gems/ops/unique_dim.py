@@ -253,19 +253,23 @@ def _unique_dim_gather_moved_kernel(
     flat_ptr: tl.tensor,
     unique_indices_ptr: tl.tensor,
     output_ptr: tl.tensor,
-    total_elements: int,
+    num_unique: int,
     row_len: int,
     BLOCK_SIZE: tl.constexpr,
 ):
-    pid = ext.program_id(0)
-    offsets = pid * BLOCK_SIZE + tl.arange(0, BLOCK_SIZE)
-    mask = offsets < total_elements
+    # One program per (output row, column chunk). Copies a contiguous span of
+    # the source row selected through ``unique_indices`` into the matching span
+    # of the output row. Loading ``src_row`` once per program (scalar) and using
+    # contiguous column offsets avoids the per-element integer divide/modulo and
+    # scattered indexing of a flat-offset gather, which dominate NPU time.
+    row = ext.program_id(0)
+    chunk = ext.program_id(1)
+    col = chunk * BLOCK_SIZE + tl.arange(0, BLOCK_SIZE)
+    mask = col < row_len
 
-    unique_pos = offsets // row_len
-    col = offsets - unique_pos * row_len
-    src_row = tl.load(unique_indices_ptr + unique_pos, mask=mask)
+    src_row = tl.load(unique_indices_ptr + row)
     values = tl.load(flat_ptr + src_row * row_len + col, mask=mask)
-    tl.store(output_ptr + offsets, values, mask=mask)
+    tl.store(output_ptr + row * row_len + col, values, mask=mask)
 
 
 @libentry()
@@ -755,13 +759,14 @@ def _unique_dim_gather_output(
         dtype=moved.dtype,
         device=moved.device,
     )
-    grid = (triton.cdiv(moved_output.numel(), _UNIQUE_DIM_GATHER_BLOCK_SIZE), 1, 1)
+    num_chunks = triton.cdiv(row_len, _UNIQUE_DIM_GATHER_BLOCK_SIZE)
+    grid = (num_unique, num_chunks, 1)
     with torch_device_fn.device(moved.device.index):
         _unique_dim_gather_moved_kernel[grid](
             flat,
             unique_indices,
             moved_output,
-            moved_output.numel(),
+            num_unique,
             row_len,
             BLOCK_SIZE=_UNIQUE_DIM_GATHER_BLOCK_SIZE,
             num_warps=4,
