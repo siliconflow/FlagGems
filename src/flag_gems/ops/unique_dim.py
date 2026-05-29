@@ -20,6 +20,9 @@ _UNIQUE_DIM_GROUP_SCAN_BLOCK_SIZE = 4096
 # is much cheaper than a 16-pass int64 radix sort for tiny shapes.
 _UNIQUE_DIM_RANK_SORT_MAX_KEYS = 2048
 _UNIQUE_DIM_HASH_MIN_ROW_LEN = 1024
+# Smaller tile for the fused key kernel's float branches: their int64 bit-twiddle
+# temporaries overflow the Ascend unified buffer at the default tile size.
+_UNIQUE_DIM_BUILD_KEY_FLOAT_BLOCK_SIZE = 256
 
 
 # Per-column bit budgets and to-int64 conversions that preserve the original
@@ -332,32 +335,142 @@ def _monotonic_key_bits(dtype: torch.dtype):
     return _INT_DTYPE_BITS.get(dtype)
 
 
-def _monotonic_int64_column(flat: torch.Tensor, col: int) -> torch.Tensor:
-    """Apply the dtype-appropriate monotonic remap to a single column of a
-    ``(D, M)`` tensor and return a fresh ``(D,)`` int64 tensor.
+# Monotonic-remap kinds for the fused key-build kernel.
+_REMAP_INT = 0  # signed/unsigned int: value + KEY_OFFSET
+_REMAP_FP16 = 1  # 16-bit float: order-preserving bit twiddle
+_REMAP_FP32 = 2  # 32-bit float: order-preserving bit twiddle
 
-    Computing per-column avoids materializing the full ``(D, M)`` int64
-    tensor (which costs ``8 * D * M`` bytes) for wide inputs.
+
+def _remap_info(flat: torch.Tensor):
+    """Return ``(int_view, remap_kind, key_offset)`` describing how to map this
+    dtype to an order-preserving non-negative int64 in the fused key kernel.
+
+    ``int_view`` reinterprets the buffer as an integer type the kernel can load
+    directly (floats are bit-cast); the remap itself happens on-device.
     """
     dt = flat.dtype
-    col_data = flat[:, col].contiguous()
-    if dt in (torch.uint8, torch.bool):
-        return col_data.to(torch.int64)
+    if dt == torch.bool:
+        return flat.view(torch.uint8), _REMAP_INT, 0
+    if dt == torch.uint8:
+        return flat, _REMAP_INT, 0
     if dt == torch.int8:
-        return col_data.to(torch.int64) + (1 << 7)
+        return flat, _REMAP_INT, 1 << 7
     if dt == torch.int16:
-        return col_data.to(torch.int64) + (1 << 15)
+        return flat, _REMAP_INT, 1 << 15
     if dt == torch.int32:
-        return col_data.to(torch.int64) + (1 << 31)
+        return flat, _REMAP_INT, 1 << 31
     if dt in (torch.float16, torch.bfloat16):
-        as_int = col_data.view(torch.int16).to(torch.int64) & 0xFFFF
-        sign_set = (as_int & 0x8000) != 0
-        return torch.where(sign_set, as_int ^ 0xFFFF, as_int ^ 0x8000)
+        return flat.view(torch.int16), _REMAP_FP16, 0
     if dt == torch.float32:
-        as_int = col_data.view(torch.int32).to(torch.int64) & 0xFFFFFFFF
-        sign_set = (as_int & 0x80000000) != 0
-        return torch.where(sign_set, as_int ^ 0xFFFFFFFF, as_int ^ 0x80000000)
+        return flat.view(torch.int32), _REMAP_FP32, 0
     raise NotImplementedError(dt)
+
+
+@libentry()
+@triton.jit
+def _unique_dim_build_key_kernel(
+    flat_ptr: tl.tensor,
+    indices_ptr: tl.tensor,
+    group_id_ptr: tl.tensor,
+    out_ptr: tl.tensor,
+    num_rows: int,
+    row_stride: int,
+    col: int,
+    KEY_OFFSET: tl.constexpr,
+    KEY_SCALE: tl.constexpr,
+    REMAP_KIND: tl.constexpr,
+    FIRST: tl.constexpr,
+    BLOCK_SIZE: tl.constexpr,
+):
+    """Build one cascade pass' composite key in a single launch.
+
+    For ``FIRST`` (first column) the key is just the column's monotonic remap.
+    Otherwise the row is fetched through the current permutation ``indices`` and
+    the running ``group_id`` prefix is folded in as ``group_id * key_scale +
+    value`` (multiply/add rather than shift/or, matching the rest of the file).
+
+    This fuses what was a ``select -> contiguous -> cast -> add -> gather ->
+    mul -> add`` chain of separate ops into one kernel, which is the dominant
+    per-pass host/launch cost on backends with a native sort.
+    """
+    pid = ext.program_id(0)
+    offsets = pid * BLOCK_SIZE + tl.arange(0, BLOCK_SIZE)
+    mask = offsets < num_rows
+
+    if FIRST:
+        row = offsets.to(tl.int64)
+    else:
+        row = tl.load(indices_ptr + offsets, mask=mask, other=0)
+    base = row * row_stride + col
+
+    if REMAP_KIND == 0:  # _REMAP_INT
+        x = tl.load(flat_ptr + base, mask=mask, other=0).to(tl.int64)
+        val = x + KEY_OFFSET
+    elif REMAP_KIND == 1:  # _REMAP_FP16
+        bits = tl.load(flat_ptr + base, mask=mask, other=0).to(tl.int64) & 0xFFFF
+        sign = (bits & 0x8000) != 0
+        val = tl.where(sign, bits ^ 0xFFFF, bits ^ 0x8000)
+    else:  # _REMAP_FP32
+        bits = tl.load(flat_ptr + base, mask=mask, other=0).to(tl.int64) & 0xFFFFFFFF
+        sign = (bits & 0x80000000) != 0
+        val = tl.where(sign, bits ^ 0xFFFFFFFF, bits ^ 0x80000000)
+
+    if FIRST:
+        out = val
+    else:
+        gid = tl.load(group_id_ptr + offsets, mask=mask, other=0)
+        out = gid * KEY_SCALE + val
+    tl.store(out_ptr + offsets, out, mask=mask)
+
+
+def _build_composite_key(
+    flat_view: torch.Tensor,
+    col: int,
+    indices: torch.Tensor | None,
+    group_id: torch.Tensor | None,
+    num_rows: int,
+    row_stride: int,
+    key_offset: int,
+    key_scale: int,
+    remap_kind: int,
+) -> torch.Tensor:
+    """One-launch composite key for cascade pass ``col``.
+
+    ``indices``/``group_id`` are ``None`` on the first pass; otherwise they are
+    the current permutation and running group ids.
+    """
+    out = torch.empty(num_rows, dtype=torch.int64, device=flat_view.device)
+    first = indices is None
+    # Triton needs valid tensor handles even for the unused pointers on the
+    # first pass; the kernel guards their loads behind ``FIRST``.
+    indices_arg = flat_view if first else indices
+    group_id_arg = flat_view if first else group_id
+    # The float bit-twiddle branches allocate several int64 temporaries per
+    # element; at the default tile this overflows the Ascend unified buffer, so
+    # floats use a smaller tile. Integer remap is light and keeps the full tile.
+    block_size = (
+        _UNIQUE_DIM_GATHER_BLOCK_SIZE
+        if remap_kind == _REMAP_INT
+        else _UNIQUE_DIM_BUILD_KEY_FLOAT_BLOCK_SIZE
+    )
+    grid = (triton.cdiv(num_rows, block_size), 1, 1)
+    with torch_device_fn.device(flat_view.device.index):
+        _unique_dim_build_key_kernel[grid](
+            flat_view,
+            indices_arg,
+            group_id_arg,
+            out,
+            num_rows,
+            row_stride,
+            col,
+            KEY_OFFSET=key_offset,
+            KEY_SCALE=key_scale,
+            REMAP_KIND=remap_kind,
+            FIRST=first,
+            BLOCK_SIZE=block_size,
+            num_warps=4,
+        )
+    return out
 
 
 def _triton_gather_1d(values: torch.Tensor, indices: torch.Tensor) -> torch.Tensor:
@@ -476,20 +589,24 @@ def _lex_argsort_rows_composite(flat: torch.Tensor):
         return indices, True
 
     key_scale = 1 << key_bits
+    flat_view, remap_kind, key_offset = _remap_info(flat)
     indices = None
     group_id = None
     all_unique = False
     for col in range(num_cols):
-        column_keys = _monotonic_int64_column(flat, col)
-        if col == 0:
-            keys = column_keys
-        else:
-            keys = _triton_gather_1d(column_keys, indices)
-            # ``group_id * scale + keys`` rather than ``(group_id << bits) | keys``.
-            # Functionally identical because ``keys`` is in ``[0, scale)`` after
-            # the monotonic remap, but the multiply/add path avoids the int64
-            # bitwise kernels that some Ascend/NPU backends do not provide.
-            keys = group_id * key_scale + keys
+        # One fused launch builds ``group_id * key_scale + monotonic(value)``,
+        # gathering through the current permutation when ``col > 0``.
+        keys = _build_composite_key(
+            flat_view,
+            col,
+            indices,
+            group_id,
+            num_rows,
+            num_cols,
+            key_offset,
+            key_scale,
+            remap_kind,
+        )
         perm, sorted_keys = _argsort_keys(keys)
         indices = perm if col == 0 else _triton_gather_1d(indices, perm)
         group_id, last_group_id = _group_id_from_sorted(sorted_keys)
