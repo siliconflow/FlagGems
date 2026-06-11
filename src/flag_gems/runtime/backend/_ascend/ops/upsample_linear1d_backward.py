@@ -31,6 +31,15 @@ DOT_BLOCK_M = 128
 DOT_BLOCK_N = 256
 DOT_BLOCK_K = 64
 
+# Large exact x2 shapes are faster through torch_npu composed ops than through
+# the dense dot: downsample becomes a strided view copy, upsample a depthwise
+# conv with the fixed 4-tap stencil. Weights are cached per (device, dtype,
+# channels, width).
+TORCH_COMPOSE_MIN_IN_W = 4096
+TORCH_COMPOSE_MIN_ROWS = 1024
+SCALE2_BOUNDARY_BLOCK_M = 128
+_TORCH_COMPOSE_CACHE = {}
+
 
 @triton.jit
 def upsample_linear1d_backward_coeff_kernel(
@@ -115,6 +124,7 @@ def upsample_linear1d_backward_kernel(
     in_w,
     out_w,
     align_corners: tl.constexpr,
+    WINDOW: tl.constexpr,
     BLOCK_W: tl.constexpr,
     ROWS_PER_BLOCK: tl.constexpr,
 ):
@@ -143,7 +153,7 @@ def upsample_linear1d_backward_kernel(
         go_base = grad_out_ptr + row_offsets * out_w
         acc = tl.zeros((ROWS_PER_BLOCK, BLOCK_W), dtype=tl.float32)
 
-        for i in range(-2, 3):
+        for i in tl.static_range(-WINDOW, WINDOW + 1):
             x_out = base + i
             valid = (x_out >= 0) & (x_out < out_w)
             x_out_f = x_out.to(tl.float32)
@@ -177,6 +187,39 @@ def upsample_linear1d_backward_kernel(
         row_start += row_step
 
 
+@triton.jit
+def upsample_linear1d_backward_scale2_boundary_kernel(
+    grad_out_ptr,
+    grad_in_ptr,
+    rows,
+    IN_W: tl.constexpr,
+    OUT_W: tl.constexpr,
+    BLOCK_M: tl.constexpr,
+):
+    row_offsets = tl.program_id(0) * BLOCK_M + tl.arange(0, BLOCK_M)
+    mask = row_offsets < rows
+
+    left = tl.load(grad_in_ptr + row_offsets * IN_W, mask=mask, other=0.0).to(
+        tl.float32
+    )
+    left_grad = tl.load(grad_out_ptr + row_offsets * OUT_W, mask=mask, other=0.0).to(
+        tl.float32
+    )
+    tl.store(grad_in_ptr + row_offsets * IN_W, left + left_grad * 0.25, mask=mask)
+
+    right = tl.load(
+        grad_in_ptr + row_offsets * IN_W + (IN_W - 1), mask=mask, other=0.0
+    ).to(tl.float32)
+    right_grad = tl.load(
+        grad_out_ptr + row_offsets * OUT_W + (OUT_W - 1), mask=mask, other=0.0
+    ).to(tl.float32)
+    tl.store(
+        grad_in_ptr + row_offsets * IN_W + (IN_W - 1),
+        right + right_grad * 0.25,
+        mask=mask,
+    )
+
+
 def _normalize_input_size(input_size):
     if len(input_size) == 3:
         return input_size
@@ -207,8 +250,20 @@ def _select_tiles(in_w, element_size):
     return block_w, rows_per_block
 
 
+def _is_float_dtype(grad_output):
+    return grad_output.dtype in (torch.float16, torch.bfloat16, torch.float32)
+
+
+def _can_use_compose_path(grad_output, rows, in_w):
+    return (
+        _is_float_dtype(grad_output)
+        and in_w >= TORCH_COMPOSE_MIN_IN_W
+        and rows >= TORCH_COMPOSE_MIN_ROWS
+    )
+
+
 def _can_use_dot_path(grad_output, rows, in_w, out_w):
-    if grad_output.dtype not in (torch.float16, torch.bfloat16, torch.float32):
+    if not _is_float_dtype(grad_output):
         return False
     if not (out_w * 2 == in_w or out_w == in_w * 2):
         return False
@@ -229,6 +284,129 @@ def _dot_block_k(grad_output, in_w, out_w):
     ):
         return 128
     return DOT_BLOCK_K
+
+
+def _upsample_linear1d_backward_downsample_view_copy(grad_out_3d, n, c, in_w, out_w):
+    grad_in = torch.empty(
+        (n, c, in_w), device=grad_out_3d.device, dtype=grad_out_3d.dtype
+    )
+    half_grad = (grad_out_3d * 0.5).unsqueeze(-1).expand(n, c, out_w, 2)
+    grad_in.view(n, c, out_w, 2).copy_(half_grad)
+    return grad_in
+
+
+def _get_scale2_conv_weight(grad_out_3d, channels, in_w):
+    dtype = torch.float32 if grad_out_3d.dtype == torch.float16 else grad_out_3d.dtype
+    key = (
+        "scale2_conv_weight",
+        grad_out_3d.device.type,
+        grad_out_3d.device.index,
+        dtype,
+        channels,
+        in_w,
+    )
+    weight = _TORCH_COMPOSE_CACHE.get(key)
+    if weight is None:
+        weight = torch.tensor(
+            [0.25, 0.75, 0.75, 0.25],
+            device=grad_out_3d.device,
+            dtype=dtype,
+        )
+        weight = weight.view(1, 1, 1, 4).expand(channels, 1, 1, 4).contiguous()
+        _TORCH_COMPOSE_CACHE[key] = weight
+    return weight
+
+
+def _get_align_true_affine_conv_params(grad_out_3d, channels, in_w, out_w):
+    dtype = torch.float32 if grad_out_3d.dtype == torch.float16 else grad_out_3d.dtype
+    key = (
+        "align_true_affine_conv",
+        grad_out_3d.device.type,
+        grad_out_3d.device.index,
+        dtype,
+        channels,
+        in_w,
+    )
+    params = _TORCH_COMPOSE_CACHE.get(key)
+    if params is None:
+        denom = float(out_w - 1)
+        base = torch.tensor(
+            [in_w / denom, 1.0, in_w / denom, 1.0 / denom],
+            device=grad_out_3d.device,
+            dtype=dtype,
+        )
+        slope = torch.tensor(
+            [-1.0 / denom, -1.0 / denom, 1.0 / denom, 1.0 / denom],
+            device=grad_out_3d.device,
+            dtype=dtype,
+        )
+        weight = torch.empty(
+            (channels * 2, 1, 1, 4),
+            device=grad_out_3d.device,
+            dtype=dtype,
+        )
+        weight[0::2, 0, 0, :].copy_(base)
+        weight[1::2, 0, 0, :].copy_(slope)
+        offsets = torch.arange(in_w, device=grad_out_3d.device, dtype=dtype).view(
+            1, 1, in_w
+        )
+        params = weight, offsets
+        _TORCH_COMPOSE_CACHE[key] = params
+    return params
+
+
+def _upsample_linear1d_backward_scale2_conv(grad_out_3d, n, c, in_w, out_w):
+    weight = _get_scale2_conv_weight(grad_out_3d, c, in_w)
+    compute_grad = (
+        torch.ops.npu.npu_dtype_cast(grad_out_3d, torch.float32)
+        if grad_out_3d.dtype == torch.float16
+        else grad_out_3d
+    )
+    grad_in = torch.ops.npu.npu_conv2d(
+        compute_grad.view(n, c, 1, out_w),
+        weight,
+        None,
+        [1, 2],
+        [0, 1],
+        [1, 1],
+        c,
+    ).view(n, c, in_w)
+    upsample_linear1d_backward_scale2_boundary_kernel[
+        (triton.cdiv(n * c, SCALE2_BOUNDARY_BLOCK_M),)
+    ](
+        compute_grad,
+        grad_in,
+        n * c,
+        IN_W=in_w,
+        OUT_W=out_w,
+        BLOCK_M=SCALE2_BOUNDARY_BLOCK_M,
+    )
+    if grad_out_3d.dtype == torch.float16:
+        grad_in = torch.ops.npu.npu_dtype_cast(grad_in, torch.float16)
+    return grad_in
+
+
+def _upsample_linear1d_backward_align_true_scale2_conv(grad_out_3d, n, c, in_w, out_w):
+    weight, offsets = _get_align_true_affine_conv_params(grad_out_3d, c, in_w, out_w)
+    compute_grad = (
+        torch.ops.npu.npu_dtype_cast(grad_out_3d, torch.float32)
+        if grad_out_3d.dtype == torch.float16
+        else grad_out_3d
+    )
+    pair = torch.ops.npu.npu_conv2d(
+        compute_grad.view(n, c, 1, out_w),
+        weight,
+        None,
+        [1, 2],
+        [0, 1],
+        [1, 1],
+        c,
+    ).view(n, c, 2, in_w)
+    grad_in = pair[:, :, 0, :]
+    grad_in.addcmul_(pair[:, :, 1, :], offsets)
+    if grad_out_3d.dtype == torch.float16:
+        grad_in = torch.ops.npu.npu_dtype_cast(grad_in, torch.float16)
+    return grad_in
 
 
 def _upsample_linear1d_backward_dot(
@@ -289,17 +467,35 @@ def upsample_linear1d_backward(
 
     grad_out_3d = grad_output.contiguous().view(n, c, out_w)
     rows = n * c
+    compose_ok = _can_use_compose_path(grad_output, rows, in_w)
 
     with _device_guard(grad_output):
-        if _can_use_dot_path(grad_output, rows, in_w, out_w):
-            # Exact-x2 shapes whose coeff matrix fits the budget: build the
-            # [out_w, in_w] interpolation matrix and run grad_in = grad_out @ coeff
-            # on the cube engine.
+        if not align_corners and out_w * 2 == in_w and compose_ok:
+            # Large exact x2 downsample: every input pixel is grad_out / 2.
+            grad_in = _upsample_linear1d_backward_downsample_view_copy(
+                grad_out_3d, n, c, in_w, out_w
+            )
+        elif out_w == in_w * 2 and compose_ok:
+            # Large exact x2 upsample: fixed 4-tap stencil as a depthwise conv,
+            # affine variant for align_corners=True.
+            if align_corners:
+                grad_in = _upsample_linear1d_backward_align_true_scale2_conv(
+                    grad_out_3d, n, c, in_w, out_w
+                )
+            else:
+                grad_in = _upsample_linear1d_backward_scale2_conv(
+                    grad_out_3d, n, c, in_w, out_w
+                )
+        elif _can_use_dot_path(grad_output, rows, in_w, out_w):
+            # Remaining exact x2 shapes: build the [out_w, in_w] interpolation
+            # matrix and run grad_in = grad_out @ coeff on the cube engine.
             grad_in = _upsample_linear1d_backward_dot(
                 grad_out_3d, n, c, rows, in_w, out_w, align_corners
             )
         else:
-            # Generic per-element gather: correct for any scale / align mode.
+            # Generic per-element gather. The scan window must cover every
+            # output position contributing to one input pixel, which grows with
+            # the upsampling ratio.
             grad_in = torch.empty(
                 (n, c, in_w), device=grad_output.device, dtype=grad_output.dtype
             )
@@ -314,6 +510,7 @@ def upsample_linear1d_backward(
                 in_w,
                 out_w,
                 align_corners,
+                WINDOW=max(2, -(-out_w // in_w) + 2),
                 BLOCK_W=block_w,
                 ROWS_PER_BLOCK=rows_per_block,
             )
