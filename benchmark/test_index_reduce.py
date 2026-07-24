@@ -70,6 +70,10 @@ def _run_index_reduce_benchmark(reduce):
 
 @pytest.mark.index_reduce_
 @pytest.mark.skipif(
+    flag_gems.vendor_name == "ascend",
+    reason="torch-npu aten::index_reduce.out falls back to CPU on Ascend",
+)
+@pytest.mark.skipif(
     flag_gems.vendor_name == "tsingmicro", reason="Issue #4131: not working"
 )
 def test_index_reduce_prod():
@@ -77,6 +81,10 @@ def test_index_reduce_prod():
 
 
 @pytest.mark.index_reduce_
+@pytest.mark.skipif(
+    flag_gems.vendor_name == "ascend",
+    reason="torch-npu aten::index_reduce.out falls back to CPU on Ascend",
+)
 @pytest.mark.skipif(
     flag_gems.vendor_name == "tsingmicro", reason="Issue #4131: not working"
 )
@@ -86,6 +94,10 @@ def test_index_reduce_mean():
 
 @pytest.mark.index_reduce_
 @pytest.mark.skipif(
+    flag_gems.vendor_name == "ascend",
+    reason="torch-npu aten::index_reduce.out falls back to CPU on Ascend",
+)
+@pytest.mark.skipif(
     flag_gems.vendor_name == "tsingmicro", reason="Issue #4131: not working"
 )
 def test_index_reduce_amax():
@@ -93,6 +105,10 @@ def test_index_reduce_amax():
 
 
 @pytest.mark.index_reduce_
+@pytest.mark.skipif(
+    flag_gems.vendor_name == "ascend",
+    reason="torch-npu aten::index_reduce.out falls back to CPU on Ascend",
+)
 @pytest.mark.skipif(
     flag_gems.vendor_name == "tsingmicro", reason="Issue #4131: not working"
 )
