@@ -10324,6 +10324,21 @@ ops:
   - Tensor
   stages:
   - alpha: '5.4'
+- id: real
+  description: 'Returns the real component of a complex tensor as a zero-copy view.
+    For
+
+    non-complex tensors, returns the input tensor unchanged.
+
+    '
+  for:
+  - real
+  labels:
+  - aten
+  kind:
+  - Tensor
+  stages:
+  - alpha: '5.4'
 - id: reciprocal
   description: Returns a new tensor with the reciprocal of the elements of `input`.
   for:
@@ -11486,6 +11501,21 @@ ops:
   - Tensor
   stages:
   - stable: '3.0'
+- id: scatter_reduce_two
+  description: 'Applies a reduction to source values scattered at the indices specified
+    by `index`.
+
+    This entry covers the functional `scatter_reduce.two` ATen overload.
+
+    '
+  for:
+  - scatter_reduce.two
+  labels:
+  - aten
+  kind:
+  - Reduction
+  stages:
+  - alpha: '5.4'
 - id: scatter_reduce_two_
   description: 'A specific low-level ATen operator primarily encountered during model
     compilation
@@ -11502,6 +11532,21 @@ ops:
   - Reduction
   stages:
   - alpha: '5.3'
+- id: scatter_reduce_two_out
+  description: 'Applies a scatter reduction and writes the result to the provided
+    `out` tensor.
+
+    This entry covers the `scatter_reduce.two_out` ATen overload.
+
+    '
+  for:
+  - scatter_reduce.two_out
+  labels:
+  - aten
+  kind:
+  - Reduction
+  stages:
+  - alpha: '5.4'
 - id: scatter_src
   description: 'Writes all values from the tensor `src` into provided tensor at the
     indices
@@ -12760,6 +12805,26 @@ ops:
   - Math
   stages:
   - alpha: '5.4'
+- id: special_laguerre_polynomial_l
+  description: 'Computes the Laguerre polynomial :math:`L_n(x)` element-wise for tensor
+
+    and scalar x/n overloads, including destination-passing variants.
+
+    '
+  for:
+  - special_laguerre_polynomial_l
+  - special_laguerre_polynomial_l.out
+  - special_laguerre_polynomial_l.x_scalar
+  - special_laguerre_polynomial_l.x_scalar_out
+  - special_laguerre_polynomial_l.n_scalar
+  - special_laguerre_polynomial_l.n_scalar_out
+  labels:
+  - aten
+  - pointwise
+  kind:
+  - Math
+  stages:
+  - alpha: '5.4'
 - id: special_legendre_polynomial_p
   description: 'Computes the Legendre polynomial P_n(x) of degree n for each element
     in the input tensor,
@@ -13759,6 +13824,21 @@ ops:
   - Tensor
   stages:
   - alpha: '5.1'
+- id: transpose_copy
+  description: 'Returns a new contiguous tensor with the two specified dimensions
+    swapped.
+
+    The result does not alias the input tensor.
+
+    '
+  for:
+  - transpose_copy.int
+  labels:
+  - aten
+  kind:
+  - Tensor
+  stages:
+  - alpha: '5.4'
 - id: tril
   description: 'Returns the lower triangular part of an input matrix (or a batch of
     matrices) and
@@ -13788,6 +13868,21 @@ ops:
   - BLAS
   stages:
   - beta: '5.3'
+- id: tril_indices
+  description: 'Returns the row and column coordinates of the lower-triangular part
+    of a
+
+    `row` by `col` matrix in row-major order.
+
+    '
+  for:
+  - tril_indices
+  labels:
+  - aten
+  kind:
+  - Tensor
+  stages:
+  - alpha: '5.4'
 - id: tril_out
   description: 'A variant of `tril()` that explicitly assigns the output to the `out`
     parameter.
@@ -13838,6 +13933,21 @@ ops:
   - NeuralNetwork
   stages:
   - stable: '5.0'
+- id: triu_indices
+  description: 'Returns the row and column coordinates of the upper-triangular part
+    of a
+
+    `row` by `col` matrix in row-major order.
+
+    '
+  for:
+  - triu_indices
+  labels:
+  - aten
+  kind:
+  - Tensor
+  stages:
+  - alpha: '5.4'
 - id: true_divide
   description: Performs element-wise true division between two tensors.
   for:

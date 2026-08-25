@@ -31,6 +31,7 @@ from .div import div_mode, div_mode_
 from .gcd_ import gcd_
 from .hadamard_transform import hadamard_transform
 from .histc import histc
+from .index_reduce import index_reduce_
 from .index_select_backward import index_select_backward
 from .linalg_cholesky import linalg_cholesky
 from .linalg_matrix_norm import linalg_matrix_norm
@@ -43,6 +44,7 @@ from .log_normal_ import log_normal_
 from .matmul_bf16 import matmul_bf16
 from .matmul_int8 import matmul_int8
 from .mm import mm, mm_out
+from .nanmedian import nanmedian, nanmedian_dim, nanmedian_dim_values, nanmedian_out
 from .narrow_copy import narrow_copy
 from .nonzero_numpy import nonzero_numpy
 from .permute_copy import permute_copy
@@ -94,6 +96,7 @@ __all__ = [
     "gcd_",
     "hadamard_transform",
     "histc",
+    "index_reduce_",
     "index_select_backward",
     "linalg_cholesky",
     "linalg_matrix_norm",
@@ -105,6 +108,10 @@ __all__ = [
     "matmul_int8",
     "mm",
     "mm_out",
+    "nanmedian",
+    "nanmedian_dim",
+    "nanmedian_dim_values",
+    "nanmedian_out",
     "narrow_copy",
     "nonzero_numpy",
     "permute_copy",

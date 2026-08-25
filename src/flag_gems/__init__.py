@@ -26,7 +26,6 @@ from flag_gems.fused import *  # noqa: F403
 from flag_gems.logging_utils import setup_flaggems_logging, teardown_flaggems_logging
 from flag_gems.modules import *  # noqa: F403
 from flag_gems.ops import *  # noqa: F403
-from flag_gems.ops import range as range_op
 from flag_gems.patches import *  # noqa: F403
 from flag_gems.patches import patch_empty_vllm  # noqa: F401
 from flag_gems.runtime import flagtune
@@ -480,8 +479,6 @@ _FULL_CONFIG = (
     ("deg2rad", deg2rad),
     ("deg2rad.out", deg2rad_out),
     ("deg2rad_", deg2rad_),
-    ("dsplit.int", dsplit),
-    ("dsplit.array", dsplit),
     ("dequantize", dequantize),
     ("dequantize.self", dequantize),
     ("diag", diag),
@@ -511,6 +508,8 @@ _FULL_CONFIG = (
     ("divide_.Tensor", true_divide_),
     ("divide_.Tensor_mode", div_mode_),
     ("dot", dot),
+    ("dsplit.array", dsplit),
+    ("dsplit.int", dsplit),
     ("elu", elu),
     ("elu_", elu_),
     ("elu_backward", elu_backward),
@@ -936,7 +935,17 @@ _FULL_CONFIG = (
     ("randn", randn),
     ("randn_like", randn_like),
     ("randperm", randperm),
-    ("range", range_op),
+    ("range", range),
+    (
+        "real",
+        real,
+        None,
+        (
+            (backend_info.dispatch_key, real_device),
+            (CONJUGATE_DISPATCH_KEY, real_conjugate),
+            (AUTOGRAD_DISPATCH_KEY, torch.library.fallthrough_kernel),
+        ),
+    ),
     ("reciprocal", reciprocal),
     ("reciprocal_", reciprocal_),
     ("reflection_pad1d", reflection_pad1d),
@@ -1081,6 +1090,18 @@ _FULL_CONFIG = (
     ("special_i1.out", special_i1_out),
     ("special_i1e", special_i1e),
     ("special_i1e.out", special_i1e_out),
+    ("special_laguerre_polynomial_l", special_laguerre_polynomial_l),
+    ("special_laguerre_polynomial_l.n_scalar", special_laguerre_polynomial_l),
+    (
+        "special_laguerre_polynomial_l.n_scalar_out",
+        special_laguerre_polynomial_l_out,
+    ),
+    ("special_laguerre_polynomial_l.out", special_laguerre_polynomial_l_out),
+    ("special_laguerre_polynomial_l.x_scalar", special_laguerre_polynomial_l),
+    (
+        "special_laguerre_polynomial_l.x_scalar_out",
+        special_laguerre_polynomial_l_out,
+    ),
     ("special_legendre_polynomial_p", special_legendre_polynomial_p),
     ("special_log1p", special_log1p),
     ("special_log1p.out", special_log1p_out),
@@ -1144,11 +1165,14 @@ _FULL_CONFIG = (
     ("topk", topk),
     ("trace", trace),
     ("transpose.int", transpose),
+    ("transpose_copy.int", transpose_copy),
     ("tril", tril),
     ("tril.out", tril_out),
     ("tril_", tril_),
+    ("tril_indices", tril_indices),
     ("triu", triu),
     ("triu_", triu_),
+    ("triu_indices", triu_indices),
     ("true_divide.out", true_divide_out),
     ("true_divide.Scalar", true_divide),
     ("true_divide.Tensor", true_divide_tensor),

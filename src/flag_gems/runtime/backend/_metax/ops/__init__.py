@@ -22,6 +22,7 @@ from .groupnorm import group_norm
 from .hadamard_transform import hadamard_transform
 from .index import index
 from .index_put import index_put, index_put_
+from .index_reduce import index_reduce_
 from .index_select import index_select
 from .isin import isin
 from .kthvalue import kthvalue
@@ -44,6 +45,7 @@ from .matmul_int8 import matmul_int8
 from .min import min, min_dim
 from .mm import mm, mm_out
 from .mvlgamma_ import mvlgamma_
+from .nanmedian import nanmedian, nanmedian_dim, nanmedian_dim_values, nanmedian_out
 from .nansum import nansum, nansum_out
 from .new_ones import new_ones
 from .nonzero import nonzero
@@ -58,6 +60,7 @@ from .repeat import repeat
 from .repeat_interleave import repeat_interleave_self_tensor
 from .resolve_conj import resolve_conj
 from .rsqrt import rsqrt, rsqrt_
+from .segment_reduce import segment_reduce, segment_reduce_out
 from .sigmoid import sigmoid
 from .special_bessel_j0 import special_bessel_j0, special_bessel_j0_out
 from .special_chebyshev_polynomial_u import special_chebyshev_polynomial_u
@@ -112,6 +115,7 @@ __all__ = [
     "index",
     "index_put",
     "index_put_",
+    "index_reduce_",
     "index_select",
     "isin",
     "kthvalue",
@@ -142,6 +146,10 @@ __all__ = [
     "mm",
     "mm_out",
     "mvlgamma_",
+    "nanmedian",
+    "nanmedian_dim",
+    "nanmedian_dim_values",
+    "nanmedian_out",
     "nansum",
     "nansum_out",
     "new_ones",
@@ -160,6 +168,8 @@ __all__ = [
     "resolve_conj",
     "rsqrt",
     "rsqrt_",
+    "segment_reduce",
+    "segment_reduce_out",
     "sigmoid",
     "special_bessel_j0",
     "special_bessel_j0_out",

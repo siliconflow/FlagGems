@@ -699,6 +699,7 @@ from flag_gems.ops.randn import randn
 from flag_gems.ops.randn_like import randn_like
 from flag_gems.ops.randperm import randperm
 from flag_gems.ops.range import range
+from flag_gems.ops.real import real, real_conjugate, real_device
 from flag_gems.ops.reciprocal import reciprocal, reciprocal_
 from flag_gems.ops.reflection_pad1d import reflection_pad1d, reflection_pad1d_out
 from flag_gems.ops.reflection_pad1d_backward import reflection_pad1d_backward
@@ -827,6 +828,10 @@ from flag_gems.ops.special_hermite_polynomial_h import special_hermite_polynomia
 from flag_gems.ops.special_i0e import special_i0e, special_i0e_out
 from flag_gems.ops.special_i1 import special_i1, special_i1_out
 from flag_gems.ops.special_i1e import special_i1e, special_i1e_out
+from flag_gems.ops.special_laguerre_polynomial_l import (
+    special_laguerre_polynomial_l,
+    special_laguerre_polynomial_l_out,
+)
 from flag_gems.ops.special_legendre_polynomial_p import special_legendre_polynomial_p
 from flag_gems.ops.special_log1p import special_log1p, special_log1p_out
 from flag_gems.ops.special_log_ndtr import special_log_ndtr
@@ -890,6 +895,8 @@ from flag_gems.ops.to import to_copy
 from flag_gems.ops.topk import topk
 from flag_gems.ops.trace import trace
 from flag_gems.ops.transpose import transpose
+from flag_gems.ops.transpose_copy import transpose_copy
+from flag_gems.ops.triangular_indices import tril_indices, triu_indices
 from flag_gems.ops.tril import tril, tril_, tril_out
 from flag_gems.ops.triu import triu, triu_
 from flag_gems.ops.true_divide import true_divide, true_divide_tensor
@@ -1700,6 +1707,9 @@ __all__ = [
     "randn_like",
     "randperm",
     "range",
+    "real",
+    "real_conjugate",
+    "real_device",
     "reciprocal",
     "reciprocal_",
     "reflection_pad1d",
@@ -1853,6 +1863,8 @@ __all__ = [
     "special_i1_out",
     "special_i1e",
     "special_i1e_out",
+    "special_laguerre_polynomial_l",
+    "special_laguerre_polynomial_l_out",
     "special_legendre_polynomial_p",
     "special_log1p",
     "special_log1p_out",
@@ -1921,11 +1933,14 @@ __all__ = [
     "topk",
     "trace",
     "transpose",
+    "transpose_copy",
     "tril",
     "tril_",
+    "tril_indices",
     "tril_out",
     "triu",
     "triu_",
+    "triu_indices",
     "true_divide",
     "true_divide_",
     "true_divide_out",
