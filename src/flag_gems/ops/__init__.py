@@ -308,7 +308,7 @@ from flag_gems.ops.clamp import (
     clamp_tensor,
     clamp_tensor_,
 )
-from flag_gems.ops.clamp_max import clamp_max, clamp_max_  # noqa: F401
+from flag_gems.ops.clamp_max import clamp_max, clamp_max_
 from flag_gems.ops.clip import clip, clip_
 from flag_gems.ops.col2im import col2im
 from flag_gems.ops.column_stack import column_stack, column_stack_out
@@ -459,7 +459,7 @@ from flag_gems.ops.functional_assert_async import _functional_assert_async
 from flag_gems.ops.gather import gather, gather_backward
 from flag_gems.ops.gather_block_quantized import gather_block_quantized
 from flag_gems.ops.gcd import gcd, gcd_out
-from flag_gems.ops.gcd_ import gcd_  # noqa: F401
+from flag_gems.ops.gcd_ import gcd_
 from flag_gems.ops.ge import ge, ge_scalar
 from flag_gems.ops.gelu import gelu, gelu_, gelu_backward
 from flag_gems.ops.geometric import geometric, geometric_
@@ -521,6 +521,7 @@ from flag_gems.ops.index_put import _index_put_impl_, index_put, index_put_
 from flag_gems.ops.index_reduce import index_reduce_
 from flag_gems.ops.index_select import index_select
 from flag_gems.ops.index_select_backward import index_select_backward
+from flag_gems.ops.int_mm import int_mm, int_mm_out
 from flag_gems.ops.is_nonzero import is_nonzero
 from flag_gems.ops.isclose import allclose, isclose
 from flag_gems.ops.isfinite import isfinite
@@ -667,6 +668,13 @@ from flag_gems.ops.mode import mode
 from flag_gems.ops.mse_loss import mse_loss
 from flag_gems.ops.mse_loss_backward import mse_loss_backward
 from flag_gems.ops.mul import mul, mul_
+from flag_gems.ops.multi_margin_loss import (
+    multi_margin_loss,
+    multi_margin_loss_backward,
+    multi_margin_loss_backward_out,
+    multi_margin_loss_out,
+)
+from flag_gems.ops.multilabel_margin_loss_forward import multilabel_margin_loss_forward
 from flag_gems.ops.multinomial import multinomial
 from flag_gems.ops.multiply import multiply
 from flag_gems.ops.multiply_ import multiply_
@@ -722,6 +730,7 @@ from flag_gems.ops.ones import ones
 from flag_gems.ops.ones_like import ones_like
 from flag_gems.ops.ormqr import ormqr
 from flag_gems.ops.pad import constant_pad_nd, pad
+from flag_gems.ops.padded_dense_to_jagged_forward import _padded_dense_to_jagged_forward
 from flag_gems.ops.pairwise_distance import pairwise_distance
 from flag_gems.ops.pdist import pdist
 from flag_gems.ops.per_token_group_quant_fp8 import (
@@ -754,6 +763,7 @@ from flag_gems.ops.randn import randn
 from flag_gems.ops.randn_like import randn_like
 from flag_gems.ops.randperm import randperm
 from flag_gems.ops.range import range
+from flag_gems.ops.real import real, real_conjugate, real_device
 from flag_gems.ops.reciprocal import reciprocal, reciprocal_
 from flag_gems.ops.reflection_pad1d import reflection_pad1d, reflection_pad1d_out
 from flag_gems.ops.reflection_pad1d_backward import reflection_pad1d_backward
@@ -882,6 +892,10 @@ from flag_gems.ops.special_hermite_polynomial_h import special_hermite_polynomia
 from flag_gems.ops.special_i0e import special_i0e, special_i0e_out
 from flag_gems.ops.special_i1 import special_i1, special_i1_out
 from flag_gems.ops.special_i1e import special_i1e, special_i1e_out
+from flag_gems.ops.special_laguerre_polynomial_l import (
+    special_laguerre_polynomial_l,
+    special_laguerre_polynomial_l_out,
+)
 from flag_gems.ops.special_legendre_polynomial_p import special_legendre_polynomial_p
 from flag_gems.ops.special_log1p import special_log1p, special_log1p_out
 from flag_gems.ops.special_log_ndtr import special_log_ndtr
@@ -925,6 +939,14 @@ from flag_gems.ops.special_sinc import special_sinc
 from flag_gems.ops.special_softmax import special_softmax
 from flag_gems.ops.special_xlog1py import special_xlog1py
 from flag_gems.ops.special_xlogy import special_xlogy, special_xlogy_
+from flag_gems.ops.special_zeta import (
+    special_zeta,
+    special_zeta_out,
+    special_zeta_scalar_tensor,
+    special_zeta_scalar_tensor_out,
+    special_zeta_tensor_scalar,
+    special_zeta_tensor_scalar_out,
+)
 from flag_gems.ops.split_with_sizes import split_with_sizes
 from flag_gems.ops.split_with_sizes_copy import split_with_sizes_copy
 from flag_gems.ops.sqrt import sqrt, sqrt_
@@ -932,6 +954,14 @@ from flag_gems.ops.square import square, square_, square_out
 from flag_gems.ops.squeeze_copy import squeeze_copy
 from flag_gems.ops.stack import stack
 from flag_gems.ops.std import std
+from flag_gems.ops.std_mean import (
+    std_mean,
+    std_mean_correction,
+    std_mean_correction_names,
+    std_mean_correction_out,
+    std_mean_dim,
+    std_mean_names_dim,
+)
 from flag_gems.ops.sub import sub, sub_
 from flag_gems.ops.subtract_ import subtract, subtract_
 from flag_gems.ops.sum import sum, sum_dim, sum_dim_out, sum_out
@@ -955,6 +985,8 @@ from flag_gems.ops.topk import topk
 from flag_gems.ops.topk_w8a16_fp8 import topk_w8a16_fp8
 from flag_gems.ops.trace import trace
 from flag_gems.ops.transpose import transpose
+from flag_gems.ops.transpose_copy import transpose_copy
+from flag_gems.ops.triangular_indices import tril_indices, triu_indices
 from flag_gems.ops.tril import tril, tril_, tril_out
 from flag_gems.ops.triu import triu, triu_
 from flag_gems.ops.true_divide import true_divide, true_divide_tensor
@@ -1096,6 +1128,7 @@ __all__ = [
     "_nested_view_from_buffer_copy",
     "_nested_view_from_jagged",
     "_nested_view_from_jagged_copy",
+    "_padded_dense_to_jagged_forward",
     "_pdist_backward",
     "_pdist_forward",
     "_prelu_kernel",
@@ -1548,6 +1581,8 @@ __all__ = [
     "index_reduce_",
     "index_select",
     "index_select_backward",
+    "int_mm",
+    "int_mm_out",
     "is_nonzero",
     "isclose",
     "isfinite",
@@ -1718,6 +1753,11 @@ __all__ = [
     "mse_loss_backward",
     "mul",
     "mul_",
+    "multi_margin_loss",
+    "multi_margin_loss_backward",
+    "multi_margin_loss_backward_out",
+    "multi_margin_loss_out",
+    "multilabel_margin_loss_forward",
     "multinomial",
     "multiply",
     "multiply_",
@@ -1811,6 +1851,9 @@ __all__ = [
     "randn_like",
     "randperm",
     "range",
+    "real",
+    "real_conjugate",
+    "real_device",
     "reciprocal",
     "reciprocal_",
     "reflection_pad1d",
@@ -1964,6 +2007,8 @@ __all__ = [
     "special_i1_out",
     "special_i1e",
     "special_i1e_out",
+    "special_laguerre_polynomial_l",
+    "special_laguerre_polynomial_l_out",
     "special_legendre_polynomial_p",
     "special_log1p",
     "special_log1p_out",
@@ -1995,6 +2040,12 @@ __all__ = [
     "special_xlog1py",
     "special_xlogy",
     "special_xlogy_",
+    "special_zeta",
+    "special_zeta_out",
+    "special_zeta_scalar_tensor",
+    "special_zeta_scalar_tensor_out",
+    "special_zeta_tensor_scalar",
+    "special_zeta_tensor_scalar_out",
     "split_with_sizes",
     "split_with_sizes_copy",
     "sqrt",
@@ -2005,6 +2056,12 @@ __all__ = [
     "squeeze_copy",
     "stack",
     "std",
+    "std_mean",
+    "std_mean_correction",
+    "std_mean_correction_names",
+    "std_mean_correction_out",
+    "std_mean_dim",
+    "std_mean_names_dim",
     "sub",
     "sub_",
     "subtract",
@@ -2041,11 +2098,14 @@ __all__ = [
     "topk_w8a16_fp8",
     "trace",
     "transpose",
+    "transpose_copy",
     "tril",
     "tril_",
+    "tril_indices",
     "tril_out",
     "triu",
     "triu_",
+    "triu_indices",
     "true_divide",
     "true_divide_",
     "true_divide_out",

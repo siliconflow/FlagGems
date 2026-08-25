@@ -13,6 +13,7 @@
 # limitations under the License.
 
 # Hygon internal implementation for attention
+
 from ._scaled_dot_product_flash_attention import _scaled_dot_product_flash_attention
 from .adaptive_max_pool3d_backward import adaptive_max_pool3d_backward
 from .addr import addr
@@ -59,6 +60,7 @@ from .hadamard_transform import hadamard_transform
 from .index_add import index_add, index_add_
 from .index_copy_ import index_copy, index_copy_
 from .index_select_backward import index_select_backward
+from .int_mm import int_mm, int_mm_out
 from .isin import isin
 from .lcm import lcm, lcm_
 from .linalg_ldl_factor import ldl_factor
@@ -80,6 +82,7 @@ from .max_unpool2d import max_unpool2d
 from .median import median_dim, median_dim_values
 from .mm import mm
 from .mul import mul, mul_
+from .nanmedian import nanmedian, nanmedian_dim, nanmedian_dim_values, nanmedian_out
 from .nansum import nansum, nansum_out
 from .nll_loss_backward import heur_block_n, nll_loss_backward
 from .per_token_group_quant_fp8 import SUPPORTED_FP8_DTYPE, per_token_group_quant_fp8
@@ -99,6 +102,7 @@ from .replication_pad2d_backward import (
     replication_pad2d_backward_grad_input,
 )
 from .scatter import scatter, scatter_
+from .scatter_reduce import scatter_reduce, scatter_reduce_, scatter_reduce_out
 from .searchsorted import (
     searchsorted,
     searchsorted_out,
@@ -166,6 +170,8 @@ __all__ = [
     "index_copy",
     "index_copy_",
     "index_select_backward",
+    "int_mm",
+    "int_mm_out",
     "isin",
     "lcm",
     "lcm_",
@@ -185,6 +191,10 @@ __all__ = [
     "mm",
     "mul",
     "mul_",
+    "nanmedian",
+    "nanmedian_dim",
+    "nanmedian_dim_values",
+    "nanmedian_out",
     "nansum",
     "nansum_out",
     "nll_loss_backward",
@@ -210,6 +220,9 @@ __all__ = [
     "ScaleDotProductAttention",
     "scatter",
     "scatter_",
+    "scatter_reduce",
+    "scatter_reduce_",
+    "scatter_reduce_out",
     "searchsorted",
     "searchsorted_out",
     "searchsorted_scalar",

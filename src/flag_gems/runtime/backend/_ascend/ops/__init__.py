@@ -56,6 +56,7 @@ from .index import index
 from .index_add import index_add, index_add_
 from .index_copy_ import index_copy, index_copy_
 from .index_fill import index_fill, index_fill_
+from .index_reduce import index_reduce_
 from .index_select import index_select
 from .isin import isin
 from .layernorm import layer_norm, native_layer_norm
@@ -86,6 +87,7 @@ from .mean import mean, mean_dim
 from .min import min, min_dim
 from .mm import mm, mm_out
 from .multinomial import multinomial
+from .nanmedian import nanmedian, nanmedian_dim, nanmedian_dim_values, nanmedian_out
 from .nansum import nansum, nansum_out
 from .nonzero_static import nonzero_static, nonzero_static_out
 from .ones import ones
@@ -112,6 +114,8 @@ from .rms_norm import rms_norm
 from .rms_norm_w8a16_int8 import rms_norm_w8a16_int8
 from .scatter import scatter, scatter_
 from .scatter_add_ import scatter_add_
+from .scatter_reduce import scatter_reduce, scatter_reduce_, scatter_reduce_out
+from .segment_reduce import _segment_reduce_backward, _segment_reduce_backward_out
 from .select_backward import select_backward
 from .select_scatter import select_scatter
 from .silu import silu, silu_
@@ -123,6 +127,7 @@ from .stack import stack
 from .threshold import threshold, threshold_backward
 from .triu import triu
 from .unique import _unique2
+from .unique_dim import unique_dim
 from .unsafe_index import unsafe_index
 from .upsample_bicubic2d_aa import _upsample_bicubic2d_aa
 from .upsample_linear1d_backward import upsample_linear1d_backward
@@ -135,6 +140,8 @@ from .zeros import zeros
 from .zeros_like import zeros_like
 
 __all__ = [
+    "_segment_reduce_backward",
+    "_segment_reduce_backward_out",
     "_unique2",
     "_upsample_bicubic2d_aa",
     "addmm",
@@ -193,6 +200,7 @@ __all__ = [
     "index_copy_",
     "index_fill",
     "index_fill_",
+    "index_reduce_",
     "index_select",
     "isin",
     "layer_norm",
@@ -238,6 +246,10 @@ __all__ = [
     "mm",
     "mm_out",
     "multinomial",
+    "nanmedian",
+    "nanmedian_dim",
+    "nanmedian_dim_values",
+    "nanmedian_out",
     "nansum",
     "nansum_out",
     "native_layer_norm",
@@ -269,6 +281,9 @@ __all__ = [
     "scatter",
     "scatter_",
     "scatter_add_",
+    "scatter_reduce",
+    "scatter_reduce_",
+    "scatter_reduce_out",
     "select_backward",
     "select_scatter",
     "silu",
@@ -285,6 +300,7 @@ __all__ = [
     "threshold",
     "threshold_backward",
     "triu",
+    "unique_dim",
     "unsafe_index",
     "upsample_linear1d_backward",
     "upsample_nearest2d",
