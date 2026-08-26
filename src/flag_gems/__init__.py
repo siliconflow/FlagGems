@@ -27,6 +27,7 @@ from flag_gems.logging_utils import setup_flaggems_logging, teardown_flaggems_lo
 from flag_gems.modules import *  # noqa: F403
 from flag_gems.ops import *  # noqa: F403
 from flag_gems.ops import range as range_op
+from flag_gems.ops.to import to_dtype as _ascend_to_dtype_bridge
 from flag_gems.patches import *  # noqa: F403
 from flag_gems.patches import patch_empty_vllm  # noqa: F401
 from flag_gems.runtime import flagtune
@@ -1117,6 +1118,12 @@ _FULL_CONFIG = (
     ("threshold_", threshold_),
     ("threshold_backward", threshold_backward),
     ("tile", tile),
+    (
+        "to.dtype",
+        _ascend_to_dtype_bridge,
+        lambda: vendor_name == "ascend" and torch_ge("2.9") and not torch_ge("2.10"),
+        ("AutogradPrivateUse1",),
+    ),
     ("topk", topk),
     ("trace", trace),
     ("transpose.int", transpose),

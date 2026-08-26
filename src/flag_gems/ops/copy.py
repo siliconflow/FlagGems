@@ -46,6 +46,10 @@ def _can_use_triton(dst: torch.Tensor, src: torch.Tensor) -> bool:
         # Preserve PyTorch's behaviour of warning when casting complex to real
         # by forcing the redispatch path, which issues the warning internally.
         return False
+    if src.is_conj() or dst.is_conj() or src.is_neg() or dst.is_neg():
+        return False
+    if src.has_names() or dst.has_names():
+        return False
     if _FLOAT8_E8M0FNU is not None and (
         src.dtype == _FLOAT8_E8M0FNU or dst.dtype == _FLOAT8_E8M0FNU
     ):

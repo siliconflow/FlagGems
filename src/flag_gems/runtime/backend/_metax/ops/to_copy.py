@@ -13,21 +13,21 @@
 # limitations under the License.
 
 import logging
-from typing import Optional
 
 import torch
 import triton
 
+from flag_gems.ops.to import (
+    _allocate_memory_format,
+    _can_use_triton,
+    _fallback_to_copy,
+    _normalize_memory_format,
+    _resolve_device,
+    _resolve_dtype,
+)
 from flag_gems.utils import pointwise_dynamic
 
 logger = logging.getLogger(__name__)
-
-_FALLBACK_KEYSET = torch._C.DispatchKeySet(
-    torch._C.DispatchKey.CompositeExplicitAutograd
-)
-
-# Check if float8_e8m0fnu dtype is available in current PyTorch version
-_FLOAT8_E8M0FNU = getattr(torch, "float8_e8m0fnu", None)
 
 # Integer/boolean dtypes that produce illegal uitofp/sitofp to bf16/fp16 on MetaX.
 # MetaX represents bf16 as i16 in LLVM IR, so uitofp i1/i8/i16/i32/i64 -> bf16
@@ -49,35 +49,6 @@ def _to_copy_func(x):
     return x
 
 
-def _resolve_dtype(x: torch.Tensor, dtype: Optional[torch.dtype]) -> torch.dtype:
-    if dtype is None:
-        return x.dtype
-    if isinstance(dtype, torch.dtype):
-        return dtype
-    raise TypeError(f"Unsupported dtype argument type: {type(dtype)!r}")
-
-
-def _resolve_device(x: torch.Tensor, device: Optional[torch.device]) -> torch.device:
-    if device is None:
-        return x.device
-    return torch.device(device)
-
-
-def _normalize_memory_format(
-    memory_format: Optional[torch.memory_format],
-) -> torch.memory_format:
-    if memory_format is None:
-        return torch.preserve_format
-    return memory_format
-
-
-def _allocate_preserve_format(x: torch.Tensor, empty_kwargs: dict) -> torch.Tensor:
-    """Recreate tensor storage while honoring preserve_format semantics."""
-    if torch.ops.aten.is_non_overlapping_and_dense(x):
-        return torch.empty_strided(x.size(), x.stride(), **empty_kwargs)
-    return torch.empty_like(x, memory_format=torch.preserve_format, **empty_kwargs)
-
-
 def to_copy(
     x,
     *,
@@ -88,63 +59,25 @@ def to_copy(
     non_blocking=False,
     memory_format=None,
 ):
-    if (layout is not None and layout != torch.strided) or x.layout != torch.strided:
-        raise NotImplementedError(
-            "FlagGems to_copy currently supports strided tensors only."
-        )
-    if pin_memory is not None:
-        raise NotImplementedError(
-            "FlagGems to_copy does not yet support pin_memory=True."
-        )
-    if x.is_quantized:
-        raise NotImplementedError(
-            "Quantized tensors are not supported in FlagGems to_copy yet."
-        )
-
     target_dtype = _resolve_dtype(x, dtype)
     target_device = _resolve_device(x, device)
     target_memory_format = _normalize_memory_format(memory_format)
 
-    # Triton does not support complex dtypes; fall back to PyTorch.
-    if x.dtype.is_complex or target_dtype.is_complex:
-        return torch.ops.aten._to_copy.default.redispatch(
-            _FALLBACK_KEYSET,
-            x,
-            dtype=target_dtype,
-            layout=layout,
-            device=target_device,
-            pin_memory=pin_memory,
-            non_blocking=non_blocking,
-            memory_format=target_memory_format,
-        )
-
-    # Triton does not support float8_e8m0fnu dtypes; fall back to PyTorch.
-    if _FLOAT8_E8M0FNU is not None and (
-        x.dtype == torch.float8_e8m0fnu or target_dtype == torch.float8_e8m0fnu
+    if not _can_use_triton(
+        x,
+        target_dtype=target_dtype,
+        target_device=target_device,
+        layout=layout,
+        pin_memory=pin_memory,
     ):
-        return torch.ops.aten._to_copy.default.redispatch(
-            _FALLBACK_KEYSET,
+        return _fallback_to_copy(
             x,
-            dtype=target_dtype,
+            dtype=dtype,
             layout=layout,
-            device=target_device,
+            device=device,
             pin_memory=pin_memory,
             non_blocking=non_blocking,
-            memory_format=target_memory_format,
-        )
-
-    if target_device != x.device or (
-        x.device.type == "cpu" and target_device.type == "cpu"
-    ):
-        return torch.ops.aten._to_copy.default.redispatch(
-            _FALLBACK_KEYSET,
-            x,
-            dtype=target_dtype,
-            layout=layout,
-            device=target_device,
-            pin_memory=pin_memory,
-            non_blocking=non_blocking,
-            memory_format=target_memory_format,
+            memory_format=memory_format,
         )
 
     # MetaX-specific: integer/bool -> bf16/fp16 generates illegal uitofp/sitofp
@@ -154,31 +87,19 @@ def to_copy(
         logger.debug("GEMS_METAX TO_COPY (int->bf16/fp16 two-step)")
         # Step 1: convert integer to float32 using Triton kernel
         empty_kwargs_f32 = {"dtype": torch.float32, "device": target_device}
-        if target_memory_format is torch.preserve_format:
-            intermediate = _allocate_preserve_format(x, empty_kwargs_f32)
-        else:
-            intermediate = torch.empty_like(
-                x, memory_format=target_memory_format, **empty_kwargs_f32
-            )
+        intermediate = _allocate_memory_format(
+            x, target_memory_format, empty_kwargs_f32
+        )
         _to_copy_func(x, out0=intermediate)
 
         # Step 2: convert float32 to target bf16/fp16 using Triton kernel
         empty_kwargs = {"dtype": target_dtype, "device": target_device}
-        if target_memory_format is torch.preserve_format:
-            out = _allocate_preserve_format(x, empty_kwargs)
-        else:
-            out = torch.empty_like(
-                x, memory_format=target_memory_format, **empty_kwargs
-            )
+        out = _allocate_memory_format(x, target_memory_format, empty_kwargs)
         _to_copy_func(intermediate, out0=out)
         return out
 
     logger.debug("GEMS_METAX TO_COPY")
     empty_kwargs = {"dtype": target_dtype, "device": target_device}
-
-    if target_memory_format is torch.preserve_format:
-        out = _allocate_preserve_format(x, empty_kwargs)
-    else:
-        out = torch.empty_like(x, memory_format=target_memory_format, **empty_kwargs)
+    out = _allocate_memory_format(x, target_memory_format, empty_kwargs)
 
     return _to_copy_func(x, out0=out)

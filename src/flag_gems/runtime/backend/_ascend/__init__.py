@@ -40,10 +40,8 @@ vendor_info = VendorDescriptor(
 )
 
 CUSTOMIZED_UNUSED_OPS = (
-    "to_copy",
     "contiguous",
     "copy_",
-    "_to_copy",
     "sort",
     "sort_stable",
     "topk",

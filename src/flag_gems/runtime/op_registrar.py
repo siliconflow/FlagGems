@@ -129,6 +129,19 @@ class GeneralOpRegistrar:
         if self.lib is None:
             raise ValueError("Library instance is not provided.")
         device_key = self.reg_key
+        allow_override = bool(getattr(fn, "_flag_gems_allow_override", False))
+
+        def _register(dispatch_key):
+            if not allow_override:
+                self.lib.impl(key, fn, dispatch_key)
+                return
+            try:
+                self.lib.impl(key, fn, dispatch_key, allow_override=True)
+            except TypeError:
+                # PyTorch before ``allow_override`` cannot replace an existing
+                # Python kernel, but retain its normal registration behaviour.
+                self.lib.impl(key, fn, dispatch_key)
+
         self.all_ops.append(fn.__name__)
         self.all_keys.append(key)
         if self.device.vendor == common.vendors.CAMBRICON:
@@ -146,10 +159,10 @@ class GeneralOpRegistrar:
                 # Older torch versions don't support allow_override
                 self.lib.impl(key, fn, device_key)
         else:
-            self.lib.impl(key, fn, device_key)
+            _register(device_key)
 
         for dispatch_key in extra_dispatch_keys:
-            self.lib.impl(key, fn, dispatch_key)
+            _register(dispatch_key)
 
     def for_each(self):
         for key, func, extra_dispatch_keys in self.config:
