@@ -25,6 +25,13 @@ from flag_gems.utils import libentry
 
 logger = logging.getLogger(__name__)
 
+# FlagGems selects one backend before importing operators. Cache descriptor
+# fields that stay fixed for the process instead of resolving them per call.
+_DEVICE_NAME = runtime.device.name
+_VENDOR_NAME = runtime.device.vendor_name
+_SUPPORTS_FP64 = runtime.device.support_fp64
+_SUPPORTS_BF16 = runtime.device.support_bf16
+
 _MAX_GRID_SIZE = 65535
 _MAX_BLOCK_C = 256
 _HYGON_FUSED_REDUCED_MAX_ELEMENTS = 2048
@@ -36,12 +43,17 @@ _MTHREADS_BLOCK_N = 4
 _REDUCE_BLOCK_SIZE = 256
 _TARGET_CHECK_BLOCK_SIZE = 256
 _TARGET_VALIDATION_CACHE_LIMIT = 128
+_REDUCTION_CODES = {"none": 0, "mean": 1, "sum": 2}
 
 # Some vendor compilers do not provide a reliable tl.device_assert contract:
 # CoreX only prints, MUSA can hang after reporting, and CANN 8.5 removes the
 # assertion during lowering. Keep the CUDA/NVIDIA device-assert path, but make
 # affected backends report a reliable host error before the loss kernel runs.
 _SYNCHRONOUS_TARGET_CHECK_VENDORS = {"ascend", "iluvatar", "mthreads"}
+_REQUIRES_SYNCHRONOUS_TARGET_CHECK = _VENDOR_NAME in _SYNCHRONOUS_TARGET_CHECK_VENDORS
+_USE_DEVICE_ASSERT = not _REQUIRES_SYNCHRONOUS_TARGET_CHECK
+_IS_HYGON_BACKEND = _VENDOR_NAME == "hygon"
+_IS_MTHREADS_BACKEND = _VENDOR_NAME == "mthreads"
 _TARGET_VALIDATION_CACHE = {}
 
 
@@ -773,9 +785,10 @@ def _normalize_p(p) -> int:
 
 def _normalize_reduction(reduction) -> int:
     if isinstance(reduction, str):
-        mapping = {"none": 0, "mean": 1, "sum": 2}
-        if reduction in mapping:
-            return mapping[reduction]
+        try:
+            return _REDUCTION_CODES[reduction]
+        except KeyError:
+            pass
     elif isinstance(reduction, int) and reduction in (0, 1, 2):
         return reduction
     raise RuntimeError(
@@ -807,9 +820,9 @@ def _shape_info(input: torch.Tensor) -> tuple[int, int, bool]:
 def _check_inputs(input, target, weight):
     if not isinstance(input, torch.Tensor) or not isinstance(target, torch.Tensor):
         raise TypeError("multi_margin_loss: input and target must be tensors")
-    if input.device.type != runtime.device.name:
+    if input.device.type != _DEVICE_NAME:
         raise RuntimeError(
-            f"multi_margin_loss: input must be on a {runtime.device.name} device"
+            f"multi_margin_loss: input must be on a {_DEVICE_NAME} device"
         )
     if input.dtype not in (
         torch.float16,
@@ -818,11 +831,11 @@ def _check_inputs(input, target, weight):
         torch.float64,
     ):
         raise RuntimeError("multi_margin_loss: input must have a floating point dtype")
-    if input.dtype == torch.float64 and not runtime.device.support_fp64:
+    if input.dtype == torch.float64 and not _SUPPORTS_FP64:
         raise RuntimeError(
             "multi_margin_loss: float64 is not supported on this backend"
         )
-    if input.dtype == torch.bfloat16 and not runtime.device.support_bf16:
+    if input.dtype == torch.bfloat16 and not _SUPPORTS_BF16:
         raise RuntimeError(
             "multi_margin_loss: bfloat16 is not supported on this backend"
         )
@@ -862,7 +875,7 @@ def _check_inputs(input, target, weight):
     original_target = target
     target = target.contiguous()
     weight = None if weight is None else weight.contiguous()
-    if N > 0 and runtime.device.vendor_name in _SYNCHRONOUS_TARGET_CHECK_VENDORS:
+    if N > 0 and _REQUIRES_SYNCHRONOUS_TARGET_CHECK:
         _validate_target_range(original_target, target, N, C)
     return input, target, weight, N, C, is_batched
 
@@ -890,7 +903,7 @@ def _hygon_partial_config(N: int, C: int):
 
 def _target_validation_key(target, N, C):
     return (
-        runtime.device.vendor_name,
+        _VENDOR_NAME,
         target.device.type,
         target.device.index,
         target.data_ptr(),
@@ -959,14 +972,11 @@ def _compute_forward(
     # supported Triton fork sees a valid pointer argument.
     weight_ptr = input if weight is None else weight
     has_weight = weight is not None
-    use_device_assert = (
-        runtime.device.vendor_name not in _SYNCHRONOUS_TARGET_CHECK_VENDORS
-    )
     grid_size = min(N, _MAX_GRID_SIZE)
     block_c = _block_c(C)
     hygon_rows_config = None
     if (
-        runtime.device.vendor_name == "hygon"
+        _IS_HYGON_BACKEND
         and is_batched
         and N > 1
         and reduction == 0
@@ -978,12 +988,7 @@ def _compute_forward(
         if rows_grid_size <= _MAX_GRID_SIZE:
             hygon_rows_config = rows_block_n, rows_block_c, rows_grid_size
     hygon_partial_config = None
-    if (
-        runtime.device.vendor_name == "hygon"
-        and is_batched
-        and N > 1
-        and reduction != 0
-    ):
+    if _IS_HYGON_BACKEND and is_batched and N > 1 and reduction != 0:
         hygon_partial_config = _hygon_partial_config(N, C)
 
     with torch_device_fn.device(input.device):
@@ -999,12 +1004,12 @@ def _compute_forward(
                 margin,
                 P=p,
                 HAS_WEIGHT=has_weight,
-                USE_DEVICE_ASSERT=use_device_assert,
+                USE_DEVICE_ASSERT=_USE_DEVICE_ASSERT,
                 BLOCK_N=rows_block_n,
                 BLOCK_C=rows_block_c,
             )
         elif (
-            runtime.device.vendor_name == "hygon"
+            _IS_HYGON_BACKEND
             and is_batched
             and N > 1
             and reduction != 0
@@ -1021,7 +1026,7 @@ def _compute_forward(
                 P=p,
                 REDUCTION=reduction,
                 HAS_WEIGHT=has_weight,
-                USE_DEVICE_ASSERT=use_device_assert,
+                USE_DEVICE_ASSERT=_USE_DEVICE_ASSERT,
                 BLOCK_NC=triton.next_power_of_2(N * C),
             )
         elif hygon_partial_config is not None:
@@ -1045,7 +1050,7 @@ def _compute_forward(
                 P=p,
                 REDUCTION=reduction,
                 HAS_WEIGHT=has_weight,
-                USE_DEVICE_ASSERT=use_device_assert,
+                USE_DEVICE_ASSERT=_USE_DEVICE_ASSERT,
                 BLOCK_N=partial_block_n,
                 BLOCK_C=partial_block_c,
             )
@@ -1056,7 +1061,7 @@ def _compute_forward(
                 REDUCTION=2,
                 BLOCK_SIZE=_REDUCE_BLOCK_SIZE,
             )
-        elif runtime.device.vendor_name == "mthreads" and is_batched and N > 1:
+        elif _IS_MTHREADS_BACKEND and is_batched and N > 1:
             grid_size = min(
                 triton.cdiv(N, _MTHREADS_BLOCK_N),
                 _MAX_GRID_SIZE,
@@ -1101,7 +1106,7 @@ def _compute_forward(
                 margin,
                 P=p,
                 HAS_WEIGHT=has_weight,
-                USE_DEVICE_ASSERT=use_device_assert,
+                USE_DEVICE_ASSERT=_USE_DEVICE_ASSERT,
                 BLOCK_C=block_c,
             )
         else:
@@ -1119,7 +1124,7 @@ def _compute_forward(
                 margin,
                 P=p,
                 HAS_WEIGHT=has_weight,
-                USE_DEVICE_ASSERT=use_device_assert,
+                USE_DEVICE_ASSERT=_USE_DEVICE_ASSERT,
                 BLOCK_C=block_c,
             )
             _multi_margin_loss_reduce_kernel[(1,)](
@@ -1242,12 +1247,9 @@ def _compute_backward(
         return grad_input
 
     weight_ptr = input if weight is None else weight
-    use_device_assert = (
-        runtime.device.vendor_name not in _SYNCHRONOUS_TARGET_CHECK_VENDORS
-    )
     grid_size = min(N, _MAX_GRID_SIZE)
     with torch_device_fn.device(input.device):
-        if runtime.device.vendor_name == "mthreads" and N > 1:
+        if _IS_MTHREADS_BACKEND and N > 1:
             flat_grid = min(
                 triton.cdiv(N * C, _MTHREADS_BACKWARD_BLOCK_SIZE),
                 _MAX_GRID_SIZE,
@@ -1285,7 +1287,7 @@ def _compute_backward(
                 BLOCK_N=_MTHREADS_BLOCK_N,
                 BLOCK_C=_block_c(C),
             )
-        elif runtime.device.vendor_name == "hygon" and N > 1:
+        elif _IS_HYGON_BACKEND and N > 1:
             grid_size = min(
                 triton.cdiv(N, _HYGON_ROWS_BLOCK_N),
                 _MAX_GRID_SIZE,
@@ -1302,7 +1304,7 @@ def _compute_backward(
                 P=p,
                 REDUCTION=reduction,
                 HAS_WEIGHT=weight is not None,
-                USE_DEVICE_ASSERT=use_device_assert,
+                USE_DEVICE_ASSERT=_USE_DEVICE_ASSERT,
                 BLOCK_N=_HYGON_ROWS_BLOCK_N,
                 BLOCK_C=_block_c(C),
             )
@@ -1319,7 +1321,7 @@ def _compute_backward(
                 P=p,
                 REDUCTION=reduction,
                 HAS_WEIGHT=weight is not None,
-                USE_DEVICE_ASSERT=use_device_assert,
+                USE_DEVICE_ASSERT=_USE_DEVICE_ASSERT,
                 BLOCK_C=_block_c(C),
             )
     return grad_input
