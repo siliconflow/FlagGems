@@ -34,12 +34,27 @@ _ILUVATAR_VECTOR_VALIDATION_MAX_ELEMENTS = 8192
 _MAX_ROW_PROGRAMS = 1024
 _MAX_LOSS_PROGRAMS = 4096
 _ASCEND_DEFAULT_VECTOR_CORES = 40
+_DEFAULT_PROGRAM_LIMITS = (_MAX_ROW_PROGRAMS, _MAX_LOSS_PROGRAMS)
+_REDUCTION_MAP = {"none": 0, "mean": 1, "sum": 2}
+_SUPPORTED_INPUT_DTYPES = (
+    torch.float16,
+    torch.bfloat16,
+    torch.float32,
+    torch.float64,
+)
+_IS_ASCEND = runtime_device.vendor_name == "ascend"
+_IS_ILUVATAR = runtime_device.vendor_name == "iluvatar"
+_BACKEND_LOSS_TARGET_BLOCK = (
+    _ILUVATAR_LOSS_TARGET_BLOCK if _IS_ILUVATAR else _LOSS_TARGET_BLOCK
+)
+_RETURN_MAX_TARGET_LENGTH = _IS_ASCEND
+_INVALID_RESULT_DTYPE = torch.int64 if _RETURN_MAX_TARGET_LENGTH else torch.int32
 _ascend_vector_cores = None
 
 
 def _get_program_limits():
-    if runtime_device.vendor_name != "ascend":
-        return _MAX_ROW_PROGRAMS, _MAX_LOSS_PROGRAMS
+    if not _IS_ASCEND:
+        return _DEFAULT_PROGRAM_LIMITS
 
     global _ascend_vector_cores
     if _ascend_vector_cores is None:
@@ -565,8 +580,7 @@ def _reduce_invalid_flags_kernel(
 
 def _normalize_reduction(reduction):
     if isinstance(reduction, str):
-        mapping = {"none": 0, "mean": 1, "sum": 2}
-        normalized = mapping.get(reduction.lower())
+        normalized = _REDUCTION_MAP.get(reduction.lower())
         if normalized is not None:
             return normalized
     elif isinstance(reduction, int) and reduction in (0, 1, 2):
@@ -593,12 +607,7 @@ def _check_inputs(input, target):
         raise RuntimeError(
             "multilabel_margin_loss_forward: target must have dtype torch.int64"
         )
-    if input.dtype not in (
-        torch.float16,
-        torch.bfloat16,
-        torch.float32,
-        torch.float64,
-    ):
+    if input.dtype not in _SUPPORTED_INPUT_DTYPES:
         raise RuntimeError(
             "multilabel_margin_loss_forward: input must have a floating-point loss dtype"
         )
@@ -641,20 +650,14 @@ def multilabel_margin_loss_forward(
     )
     target_lengths = torch.empty((n_rows,), dtype=torch.int64, device=input.device)
     row_program_limit, loss_program_limit = _get_program_limits()
-    loss_target_block = (
-        _ILUVATAR_LOSS_TARGET_BLOCK
-        if runtime_device.vendor_name == "iluvatar"
-        else _LOSS_TARGET_BLOCK
-    )
     validation_grid = min(n_rows, row_program_limit)
     validation_block_r = triton.next_power_of_2(n_rows)
     validation_block_c = triton.next_power_of_2(n_classes)
     use_vector_validation = (
-        runtime_device.vendor_name == "iluvatar"
+        _IS_ILUVATAR
         and validation_block_r * validation_block_c
         <= _ILUVATAR_VECTOR_VALIDATION_MAX_ELEMENTS
     )
-    return_max_target_length = runtime_device.vendor_name == "ascend"
     acc_dtype = torch.float64 if input.dtype == torch.float64 else torch.float32
     acc_fp64 = input.dtype == torch.float64
 
@@ -665,12 +668,8 @@ def multilabel_margin_loss_forward(
         and not scalar_or_vector
         and reduction != 0
     )
-    skip_empty_class_tile = runtime_device.vendor_name == "ascend" and reduction == 2
-    row_reduce_block = (
-        min(256, triton.next_power_of_2(n_rows))
-        if runtime_device.vendor_name == "iluvatar"
-        else 256
-    )
+    skip_empty_class_tile = _IS_ASCEND and reduction == 2
+    row_reduce_block = min(256, triton.next_power_of_2(n_rows)) if _IS_ILUVATAR else 256
     reduction_divisor = float(n_rows) if reduction == 1 else 1.0
     if scalar_or_vector or reduction == 0:
         loss = torch.empty(
@@ -689,7 +688,7 @@ def multilabel_margin_loss_forward(
     with torch_device_fn.device(input.device):
         invalid_result = torch.empty(
             (),
-            dtype=torch.int64 if return_max_target_length else torch.int32,
+            dtype=_INVALID_RESULT_DTYPE,
             device=input.device,
         )
         membership_grid = min(
@@ -711,7 +710,7 @@ def multilabel_margin_loss_forward(
                 n_rows,
                 n_classes,
                 INIT_LOSS=atomic_row_reduce,
-                RETURN_MAX_TARGET_LENGTH=return_max_target_length,
+                RETURN_MAX_TARGET_LENGTH=_RETURN_MAX_TARGET_LENGTH,
                 BLOCK_R=validation_block_r,
                 BLOCK_C=validation_block_c,
             )
@@ -736,7 +735,7 @@ def multilabel_margin_loss_forward(
                 invalid_result,
                 validation_grid,
                 n_rows,
-                RETURN_MAX_TARGET_LENGTH=return_max_target_length,
+                RETURN_MAX_TARGET_LENGTH=_RETURN_MAX_TARGET_LENGTH,
                 BLOCK=invalid_block,
             )
 
@@ -770,14 +769,16 @@ def multilabel_margin_loss_forward(
                 ATOMIC_REDUCE=atomic_row_reduce,
                 SKIP_EMPTY_CLASS_TILE=skip_empty_class_tile,
                 BLOCK_C=_LOSS_CLASS_BLOCK,
-                BLOCK_T=loss_target_block,
+                BLOCK_T=_BACKEND_LOSS_TARGET_BLOCK,
             )
         else:
             class_tiles = triton.cdiv(n_classes, _LOSS_CLASS_BLOCK)
-            full_target_tiles = triton.cdiv(n_classes, loss_target_block)
+            full_target_tiles = triton.cdiv(n_classes, _BACKEND_LOSS_TARGET_BLOCK)
             target_tiles = full_target_tiles
-            if runtime_device.vendor_name == "ascend" and reduction in (0, 1):
-                active_target_tiles = triton.cdiv(max_target_length, loss_target_block)
+            if _IS_ASCEND and reduction in (0, 1):
+                active_target_tiles = triton.cdiv(
+                    max_target_length, _BACKEND_LOSS_TARGET_BLOCK
+                )
                 target_tiles = (
                     min(
                         full_target_tiles,
@@ -786,9 +787,7 @@ def multilabel_margin_loss_forward(
                     if active_target_tiles > 0
                     else 1
                 )
-            use_class_tiled_loss = (
-                runtime_device.vendor_name == "ascend" and reduction == 2
-            )
+            use_class_tiled_loss = _IS_ASCEND and reduction == 2
             if use_class_tiled_loss:
                 tiles_per_row = class_tiles
             else:
@@ -808,7 +807,7 @@ def multilabel_margin_loss_forward(
                     total_tiles,
                     ACC_FP64=acc_fp64,
                     BLOCK_C=_LOSS_CLASS_BLOCK,
-                    BLOCK_T=loss_target_block,
+                    BLOCK_T=_BACKEND_LOSS_TARGET_BLOCK,
                 )
             else:
                 _tiled_loss_kernel[(tiled_grid,)](
@@ -823,7 +822,7 @@ def multilabel_margin_loss_forward(
                     total_tiles,
                     ACC_FP64=acc_fp64,
                     BLOCK_C=_LOSS_CLASS_BLOCK,
-                    BLOCK_T=loss_target_block,
+                    BLOCK_T=_BACKEND_LOSS_TARGET_BLOCK,
                 )
             row_grid = min(n_rows, row_program_limit)
             _reduce_tiled_rows_kernel[(row_grid,)](
