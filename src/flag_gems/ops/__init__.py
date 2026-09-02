@@ -103,9 +103,6 @@ from flag_gems.ops._native_batch_norm_legit_no_training import (
 )
 from flag_gems.ops._nested_sum_backward import _nested_sum_backward
 from flag_gems.ops._nested_view_from_buffer_copy import _nested_view_from_buffer_copy
-from flag_gems.ops._padded_dense_to_jagged_forward import (
-    _padded_dense_to_jagged_forward,
-)
 from flag_gems.ops._pdist_backward import _pdist_backward
 from flag_gems.ops._pdist_forward import _pdist_forward
 from flag_gems.ops._prelu_kernel import _prelu_kernel
@@ -669,6 +666,7 @@ from flag_gems.ops.ones import ones
 from flag_gems.ops.ones_like import ones_like
 from flag_gems.ops.ormqr import ormqr
 from flag_gems.ops.pad import constant_pad_nd, pad
+from flag_gems.ops.padded_dense_to_jagged_forward import _padded_dense_to_jagged_forward
 from flag_gems.ops.pairwise_distance import pairwise_distance
 from flag_gems.ops.pdist import pdist
 from flag_gems.ops.per_token_group_quant_fp8 import (
