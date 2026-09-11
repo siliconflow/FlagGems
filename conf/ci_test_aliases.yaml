@@ -50,7 +50,6 @@ nanmedian_dim_values: test_nanmedian
 searchsorted_scalar: test_searchsorted
 
 # Operators tested in combined files or with different naming
-embedding_bag_backward: test_embedding_bag
 embedding_bag_forward_only: test_embedding_bag
 batch_norm_backward: test_batch_norm
 batch_norm_impl_index: test_batch_norm
