@@ -55,6 +55,8 @@ from flag_gems.ops._convolution_mode import _convolution_mode
 from flag_gems.ops._cummax_helper import _cummax_helper
 from flag_gems.ops._cummin_helper import _cummin_helper
 from flag_gems.ops._dyn_quant_pack_4bit_weight import _dyn_quant_pack_4bit_weight
+from flag_gems.ops._embedding_bag import _embedding_bag, _embedding_bag_forward_only
+from flag_gems.ops._embedding_bag_backward import _embedding_bag_backward
 from flag_gems.ops._embedding_bag_dense_backward import _embedding_bag_dense_backward
 from flag_gems.ops._embedding_bag_per_sample_weights_backward import (
     _embedding_bag_per_sample_weights_backward,
@@ -1054,7 +1056,10 @@ __all__ = [
     "_cummax_helper",
     "_cummin_helper",
     "_dyn_quant_pack_4bit_weight",
+    "_embedding_bag",
+    "_embedding_bag_backward",
     "_embedding_bag_dense_backward",
+    "_embedding_bag_forward_only",
     "_embedding_bag_per_sample_weights_backward",
     "_euclidean_dist",
     "_fake_quantize_learnable_per_channel_affine_backward",

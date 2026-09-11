@@ -12,6 +12,8 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
+from ._embedding_bag import _embedding_bag, _embedding_bag_forward_only
+from ._embedding_bag_backward import _embedding_bag_backward
 from .addmm import addmm, addmm_dtype, addmm_dtype_out, addmm_out
 from .all import all, all_dim, all_dims
 from .amax import amax
@@ -135,6 +137,9 @@ from .zeros import zeros
 from .zeros_like import zeros_like
 
 __all__ = [
+    "_embedding_bag",
+    "_embedding_bag_forward_only",
+    "_embedding_bag_backward",
     "_unique2",
     "_upsample_bicubic2d_aa",
     "addmm",

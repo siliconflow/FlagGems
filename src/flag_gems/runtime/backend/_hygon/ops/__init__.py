@@ -12,6 +12,9 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
+from ._embedding_bag import _embedding_bag_forward_only
+from ._embedding_bag_backward import _embedding_bag_backward
+
 # Hygon internal implementation for attention
 from ._scaled_dot_product_flash_attention import _scaled_dot_product_flash_attention
 from .adaptive_max_pool3d_backward import adaptive_max_pool3d_backward
@@ -128,6 +131,8 @@ from .weight_norm import (
 )
 
 __all__ = [
+    "_embedding_bag_backward",
+    "_embedding_bag_forward_only",
     "_scaled_dot_product_flash_attention",
     "_unique2",
     "adaptive_max_pool3d_backward",
