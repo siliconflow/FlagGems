@@ -15,6 +15,8 @@
 from torch_musa import current_device, get_device_capability
 
 from ._conj import _conj
+from ._embedding_bag import _embedding_bag, _embedding_bag_forward_only
+from ._embedding_bag_backward import _embedding_bag_backward
 from .all import all, all_dim, all_dims
 from .amax import amax
 from .any import any, any_dim, any_dims
@@ -106,6 +108,9 @@ from .zeros_like import zeros_like
 
 __all__ = [
     "_conj",
+    "_embedding_bag",
+    "_embedding_bag_backward",
+    "_embedding_bag_forward_only",
     "_index_put_impl_",
     "_unique2",
     "all",

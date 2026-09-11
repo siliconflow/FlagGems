@@ -15,6 +15,8 @@
 import importlib
 
 from ..utils.pointwise_dynamic import ModuleGenerator
+from ._embedding_bag import _embedding_bag, _embedding_bag_forward_only
+from ._embedding_bag_backward import _embedding_bag_backward
 from ._native_batch_norm_legit_functional import _native_batch_norm_legit_functional
 from .adaptive_max_pool3d_backward import run
 from .addmm import addmm, addmm_out
@@ -80,6 +82,9 @@ _pointwise_dynamic.ModuleGenerator = ModuleGenerator
 
 __all__ = [
     "_conv_depthwise2d",
+    "_embedding_bag",
+    "_embedding_bag_backward",
+    "_embedding_bag_forward_only",
     "_native_batch_norm_legit_functional",
     "addmm",
     "addmm_",
