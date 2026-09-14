@@ -147,6 +147,18 @@ ops:
   - NeuralNetwork
   stages:
   - alpha: '5.5'
+- id: _embedding_bag
+  description: Reduce indexed embedding rows into sum, mean, or maximum bags and return
+    backward metadata.
+  for:
+  - _embedding_bag
+  labels:
+  - aten
+  - NoCPU
+  kind:
+  - NeuralNetwork
+  stages:
+  - alpha: '5.4'
 - id: _flash_attention_forward
   description: Run the canonical FlashAttention forward operator.
   for:
@@ -3708,6 +3720,26 @@ ops:
   - Convolution
   stages:
   - alpha: '5.5'
+- id: convolution_backward
+  description: Computes input, weight and bias gradients for batched 1D, 2D and 3D convolutions.
+  for:
+  - convolution_backward
+  labels:
+  - aten
+  kind:
+  - Convolution
+  stages:
+  - alpha: '5.5'
+- id: convolution_backward_out
+  description: Writes convolution gradients into the requested output tensors.
+  for:
+  - convolution_backward.out
+  labels:
+  - aten
+  kind:
+  - Convolution
+  stages:
+  - alpha: '5.5'
 - id: convolution_backward_overrideable
   description: 'Computes the gradients of a convolution with respect to the input,
     weight, and bias, returning (grad_input, grad_weight, grad_bias).
@@ -4183,6 +4215,16 @@ ops:
   - NeuralNetwork
   stages:
   - beta: '5.5'
+- id: cudnn_batch_norm
+  description: Batch normalization with paired Gems backward and saved inverse standard deviation.
+  for:
+  - cudnn_batch_norm
+  labels:
+  - aten
+  kind:
+  - Normalization
+  stages:
+  - alpha: '5.5'
 - id: cudnn_batch_norm_backward
   description: Triton kernel implementation for cudnn_batch_norm_backward.
   for:
@@ -4194,6 +4236,16 @@ ops:
   - Math
   stages:
   - alpha: '5.4'
+- id: cudnn_batch_norm_out
+  description: Batch normalization with paired Gems backward and saved inverse standard deviation.
+  for:
+  - cudnn_batch_norm.out
+  labels:
+  - aten
+  kind:
+  - Normalization
+  stages:
+  - alpha: '5.5'
 - id: cudnn_convolution
   description: 'A wrapper for cuDNN convolution backend.
 
@@ -5117,15 +5169,24 @@ ops:
   stages:
   - stable: '3.0'
 - id: embedding_bag
-  description: 'Compute sums, means, or maxes of bags of embeddings, without instantiating
-    the intermediate embeddings.
-
-    '
+  description: Reduce indexed embedding rows into bags using the shared embedding bag implementation.
   for:
   - embedding_bag
   labels:
   - aten
-  - KernelGen
+  - NoCPU
+  kind:
+  - NeuralNetwork
+  stages:
+  - alpha: '5.4'
+- id: embedding_bag_backward
+  description: Compute dense or sparse embedding bag gradients with optional frequency
+    and per-sample scaling.
+  for:
+  - _embedding_bag_backward
+  labels:
+  - aten
+  - NoCPU
   kind:
   - NeuralNetwork
   stages:
@@ -5140,6 +5201,17 @@ ops:
   labels:
   - aten
   - KernelGen
+  kind:
+  - NeuralNetwork
+  stages:
+  - alpha: '5.4'
+- id: embedding_bag_forward_only
+  description: Compute embedding bag reductions with the target auxiliary tensor interface.
+  for:
+  - _embedding_bag_forward_only
+  labels:
+  - aten
+  - NoCPU
   kind:
   - NeuralNetwork
   stages:
