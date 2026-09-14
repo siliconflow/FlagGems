@@ -659,6 +659,7 @@ from flag_gems.ops.crow_indices_copy import crow_indices_copy
 from flag_gems.ops.ctc_loss import ctc_loss
 from flag_gems.ops.cudnn_attention_backward import cudnn_attention_backward
 from flag_gems.ops.cudnn_attention_forward import cudnn_attention_forward
+from flag_gems.ops.cudnn_batch_norm import cudnn_batch_norm, cudnn_batch_norm_out
 from flag_gems.ops.cudnn_batch_norm_backward import cudnn_batch_norm_backward
 from flag_gems.ops.cudnn_convolution import cudnn_convolution
 from flag_gems.ops.cudnn_convolution_transpose import cudnn_convolution_transpose
@@ -701,7 +702,12 @@ from flag_gems.ops.dropout_ import dropout_
 from flag_gems.ops.dstack import run as dstack
 from flag_gems.ops.elu import elu, elu_, elu_backward
 from flag_gems.ops.embedding import embedding, embedding_backward
-from flag_gems.ops.embedding_bag import embedding_bag
+from flag_gems.ops.embedding_bag import (
+    _embedding_bag,
+    _embedding_bag_forward_only,
+    embedding_bag,
+)
+from flag_gems.ops.embedding_bag_backward import _embedding_bag_backward
 from flag_gems.ops.embedding_dense_backward import embedding_dense_backward
 from flag_gems.ops.embedding_renorm_ import embedding_renorm_
 from flag_gems.ops.embedding_sparse_backward import embedding_sparse_backward
@@ -1687,7 +1693,10 @@ __all__ = [
     "_dirichlet_grad",
     "_dyn_quant_matmul_4bit",
     "_dyn_quant_pack_4bit_weight",
+    "_embedding_bag",
+    "_embedding_bag_backward",
     "_embedding_bag_dense_backward",
+    "_embedding_bag_forward_only",
     "_embedding_bag_per_sample_weights_backward",
     "_embedding_bag_sparse_backward",
     "_euclidean_dist",
@@ -2227,7 +2236,9 @@ __all__ = [
     "ctc_loss",
     "cudnn_attention_backward",
     "cudnn_attention_forward",
+    "cudnn_batch_norm",
     "cudnn_batch_norm_backward",
+    "cudnn_batch_norm_out",
     "cudnn_convolution",
     "cudnn_convolution_transpose",
     "cudnn_rnn",
