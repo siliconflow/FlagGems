@@ -234,6 +234,7 @@ rshift_tensor_out: test_rshift
 batch_norm_backward: test_batch_norm
 cumprod_backward: test_cumprod
 erfinv: test_erfinv_
+embedding_bag_forward_only: test_embedding_bag
 max_pool2d_with_indices: test_max_pool2d
 max_pool3d_backward: test_max_pool3d
 multi_margin_loss_backward: test_multi_margin_loss
@@ -246,6 +247,7 @@ std_mean_correction_names: test_std_mean
 std_mean_correction_out: test_std_mean
 std_mean_dim: test_std_mean
 std_mean_names_dim: test_std_mean
+stft_center: test_stft
 tril_indices: test_triangular_indices
 trilinear_out: test_trilinear
 triu_indices: test_triangular_indices
@@ -258,3 +260,6 @@ upsample_nearest2d_backward_grad_input: test_upsample_nearest2d_backward
 # Underscore-prefixed aten op shares the base operator test file
 _linalg_eigh: test_linalg_eigh
 _flash_attention_forward: test_flash_attention
+
+fused_adamw_: test__fused_adamw_
+fused_adamw__tensor_lr: test__fused_adamw_

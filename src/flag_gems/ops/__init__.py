@@ -60,6 +60,8 @@ from flag_gems.ops._cummin_helper import _cummin_helper
 from flag_gems.ops._dirichlet_grad import _dirichlet_grad
 from flag_gems.ops._dyn_quant_matmul_4bit import _dyn_quant_matmul_4bit
 from flag_gems.ops._dyn_quant_pack_4bit_weight import _dyn_quant_pack_4bit_weight
+from flag_gems.ops._embedding_bag import _embedding_bag, _embedding_bag_forward_only
+from flag_gems.ops._embedding_bag_backward import _embedding_bag_backward
 from flag_gems.ops._embedding_bag_dense_backward import _embedding_bag_dense_backward
 from flag_gems.ops._embedding_bag_per_sample_weights_backward import (
     _embedding_bag_per_sample_weights_backward,
@@ -242,6 +244,7 @@ from flag_gems.ops._functional_sym_constrain_range_for_size import (
 )
 from flag_gems.ops._fused_adagrad_ import _fused_adagrad_
 from flag_gems.ops._fused_adam import _fused_adam, _fused_adam_
+from flag_gems.ops._fused_adamw_ import _fused_adamw_, _fused_adamw__tensor_lr
 from flag_gems.ops._fused_dropout import _fused_dropout
 from flag_gems.ops._fused_moving_avg_obs_fq_helper import (
     _fused_moving_avg_obs_fq_helper,
@@ -1372,6 +1375,7 @@ from flag_gems.ops.std_mean import (
     std_mean_dim,
     std_mean_names_dim,
 )
+from flag_gems.ops.stft import stft, stft_center
 from flag_gems.ops.sub import sub, sub_
 from flag_gems.ops.subtract_ import subtract, subtract_
 from flag_gems.ops.sum import sum, sum_dim, sum_dim_out, sum_out
@@ -1556,7 +1560,10 @@ __all__ = [
     "_dirichlet_grad",
     "_dyn_quant_matmul_4bit",
     "_dyn_quant_pack_4bit_weight",
+    "_embedding_bag",
+    "_embedding_bag_backward",
     "_embedding_bag_dense_backward",
+    "_embedding_bag_forward_only",
     "_embedding_bag_per_sample_weights_backward",
     "_embedding_bag_sparse_backward",
     "_euclidean_dist",
@@ -1718,6 +1725,8 @@ __all__ = [
     "_fused_adagrad_",
     "_fused_adam",
     "_fused_adam_",
+    "_fused_adamw_",
+    "_fused_adamw__tensor_lr",
     "_fused_dropout",
     "_fused_moving_avg_obs_fq_helper",
     "_fused_rms_norm",
@@ -2891,6 +2900,8 @@ __all__ = [
     "std_mean_correction_out",
     "std_mean_dim",
     "std_mean_names_dim",
+    "stft",
+    "stft_center",
     "sub",
     "sub_",
     "subtract",
