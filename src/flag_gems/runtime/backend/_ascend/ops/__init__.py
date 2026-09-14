@@ -13,6 +13,8 @@
 # limitations under the License.
 
 from ._dyn_quant_matmul_4bit import _dyn_quant_matmul_4bit
+from ._embedding_bag import _embedding_bag, _embedding_bag_forward_only
+from ._embedding_bag_backward import _embedding_bag_backward
 from .adaptive_avg_pool2d import adaptive_avg_pool2d
 from .adaptive_max_pool3d import adaptive_max_pool3d
 from .addmm import addmm, addmm_dtype, addmm_dtype_out, addmm_out
@@ -108,6 +110,7 @@ from .max import max, max_dim
 from .mean import mean, mean_dim
 from .min import min, min_dim
 from .mm import mm, mm_out
+from .mode import mode
 from .mul import mul
 from .multinomial import multinomial
 from .nanmedian import nanmedian, nanmedian_dim, nanmedian_dim_values, nanmedian_out
@@ -174,6 +177,9 @@ from .zeros_like import zeros_like
 
 __all__ = [
     "_dyn_quant_matmul_4bit",
+    "_embedding_bag",
+    "_embedding_bag_backward",
+    "_embedding_bag_forward_only",
     "_segment_reduce_backward",
     "_segment_reduce_backward_out",
     "_unique2",
@@ -304,6 +310,7 @@ __all__ = [
     "min_dim",
     "mm",
     "mm_out",
+    "mode",
     "mul",
     "multinomial",
     "nanmedian",

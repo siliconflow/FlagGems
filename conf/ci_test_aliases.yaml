@@ -89,6 +89,7 @@ rshift_tensor_out: test_rshift
 batch_norm_backward: test_batch_norm
 cumprod_backward: test_cumprod
 erfinv: test_erfinv_
+embedding_bag_forward_only: test_embedding_bag
 max_pool2d_with_indices: test_max_pool2d
 max_pool3d_backward: test_max_pool3d
 multi_margin_loss_backward: test_multi_margin_loss
