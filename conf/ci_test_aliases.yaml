@@ -76,6 +76,8 @@ special_zeta_scalar_tensor: test_special_zeta
 special_zeta_tensor_scalar: test_special_zeta
 
 # Operators tested in combined files or with different naming
+_embedding_bag: test_embedding_bag
+embedding_bag_forward_only: test_embedding_bag
 lshift_scalar: test_lshift
 tensor_split_sections: test_tensor_split
 tensor_split_indices: test_tensor_split
