@@ -4233,7 +4233,8 @@ ops:
   stages:
   - stable: '3.0'
 - id: embedding_bag
-  description: Reduce indexed embedding rows into sum, mean, or maximum bags and return backward metadata.
+  description: Reduce indexed embedding rows into sum, mean, or maximum bags and return
+    backward metadata.
   for:
   - _embedding_bag
   labels:
@@ -4244,7 +4245,8 @@ ops:
   stages:
   - alpha: '5.4'
 - id: embedding_bag_backward
-  description: Compute dense or sparse embedding bag gradients with optional frequency and per-sample scaling.
+  description: Compute dense or sparse embedding bag gradients with optional frequency
+    and per-sample scaling.
   for:
   - _embedding_bag_backward
   labels:
@@ -9827,8 +9829,8 @@ ops:
   stages:
   - alpha: '5.4'
 - id: multilabel_margin_loss_forward
-  description: 'Computes the forward multi-label margin loss and returns both the
-    loss and the per-class target membership mask.'
+  description: Computes the forward multi-label margin loss and returns both the loss
+    and the per-class target membership mask.
   for:
   - multilabel_margin_loss_forward
   labels:
@@ -15700,7 +15702,8 @@ ops:
   stages:
   - stable: '5.0'
 - id: upsample_bicubic2d_backward
-  description: Computes non-antialiased bicubic interpolation gradients using deterministic gather.
+  description: Computes non-antialiased bicubic interpolation gradients using deterministic
+    gather.
   for:
   - upsample_bicubic2d_backward
   labels:
