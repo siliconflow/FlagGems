@@ -15,6 +15,7 @@
 import importlib
 
 from ..utils.pointwise_dynamic import ModuleGenerator
+from ._dyn_quant_matmul_4bit import _dyn_quant_matmul_4bit
 from ._native_batch_norm_legit_functional import _native_batch_norm_legit_functional
 from .adaptive_max_pool3d_backward import run
 from .addmm import addmm, addmm_out
@@ -80,6 +81,7 @@ _pointwise_dynamic.ModuleGenerator = ModuleGenerator
 
 __all__ = [
     "_conv_depthwise2d",
+    "_dyn_quant_matmul_4bit",
     "_native_batch_norm_legit_functional",
     "addmm",
     "addmm_",
