@@ -84,15 +84,78 @@ def mode_kernel(
     tl.store(out_index + m_offset, best_index, mask=mask_m)
 
 
+@libentry()
+@triton.jit
+def _mode_byte_count(
+    inp, counts, indices, N: tl.constexpr, LOW: tl.constexpr, B: tl.constexpr
+):
+    row = tl.program_id(0)
+    bucket = tl.program_id(1)
+    value = bucket + LOW
+    i = tl.arange(0, B)
+    count = tl.full((), 0, tl.int32)
+    index = tl.full((), 0, tl.int32)
+    for start in range(tl.cdiv(N, B)):
+        pos = start * B + i
+        val = tl.load(inp + row * N + pos, pos < N, other=0).to(tl.int32)
+        match = (pos < N) & (val == value)
+        count += tl.sum(match.to(tl.int32), 0)
+        index = tl.maximum(index, tl.max(tl.where(match, pos, 0), 0))
+    tl.store(counts + row * 256 + bucket, count)
+    tl.store(indices + row * 256 + bucket, index)
+
+
+@libentry()
+@triton.jit
+def _mode_byte_select(counts, indices, values, out_indices, LOW: tl.constexpr):
+    row = tl.program_id(0)
+    bucket = tl.arange(0, 256)
+    count = tl.load(counts + row * 256 + bucket)
+    largest = tl.max(count, 0)
+    winner = tl.min(tl.where(count == largest, bucket, 256), 0)
+    index = tl.load(indices + row * 256 + winner)
+    tl.store(values + row, winner + LOW)
+    tl.store(out_indices + row, index)
+
+
+def _mode_byte(inp, dim, keepdim):
+    dim %= inp.ndim
+    x = inp.movedim(dim, -1).contiguous()
+    n = x.shape[-1]
+    rows = x.numel() // n
+    counts = torch.empty((rows, 256), dtype=torch.int32, device=x.device)
+    indices = torch.empty_like(counts)
+    values = torch.empty(x.shape[:-1], dtype=x.dtype, device=x.device)
+    out_indices = torch.empty_like(values, dtype=torch.int64)
+    if rows:
+        low = torch.iinfo(x.dtype).min
+        with torch_device_fn.device(inp.device):
+            _mode_byte_count[(rows, 256)](x, counts, indices, n, low, 512)
+            _mode_byte_select[(rows,)](counts, indices, values, out_indices, low)
+    if keepdim:
+        values = values.unsqueeze(dim)
+        out_indices = out_indices.unsqueeze(dim)
+    return namedtuple("mode", ["values", "indices"])(values, out_indices)
+
+
 def mode(inp, dim=-1, keepdim=False):
     logger.debug("GEMS MODE")
     assert dim >= -inp.ndim and dim < inp.ndim, "Invalid dim"
+    if (
+        inp.dtype in (torch.int8, torch.uint8)
+        and inp.shape[dim] > 0
+        and runtime.device.vendor_name in ("ascend", "hygon", "mthreads")
+    ):
+        return _mode_byte(inp, dim, keepdim)
     shape = list(inp.shape)
     dim = dim % inp.ndim
     N = shape[dim]
     M = inp.numel() // N
 
-    from flag_gems.ops.sort import sort as gems_sort
+    if runtime.device.vendor_name == "hygon":
+        from flag_gems import sort as gems_sort
+    else:
+        from flag_gems.ops.sort import sort as gems_sort
 
     sorted_inp, sorted_indices = gems_sort(inp, dim=dim)
 
