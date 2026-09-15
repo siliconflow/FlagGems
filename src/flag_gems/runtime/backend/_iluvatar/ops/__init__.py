@@ -15,6 +15,7 @@
 import importlib
 
 from ..utils.pointwise_dynamic import ModuleGenerator
+from ._dyn_quant_matmul_4bit import _dyn_quant_matmul_4bit
 from ._embedding_bag import _embedding_bag, _embedding_bag_forward_only
 from ._embedding_bag_backward import _embedding_bag_backward
 from ._native_batch_norm_legit_functional import _native_batch_norm_legit_functional
@@ -82,6 +83,7 @@ _pointwise_dynamic.ModuleGenerator = ModuleGenerator
 
 __all__ = [
     "_conv_depthwise2d",
+    "_dyn_quant_matmul_4bit",
     "_embedding_bag",
     "_embedding_bag_backward",
     "_embedding_bag_forward_only",

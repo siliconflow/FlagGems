@@ -12,6 +12,7 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
+from ._dyn_quant_matmul_4bit import _dyn_quant_matmul_4bit
 from ._embedding_bag import _embedding_bag, _embedding_bag_forward_only
 from ._embedding_bag_backward import _embedding_bag_backward
 from .adaptive_max_pool3d import adaptive_max_pool3d
@@ -147,6 +148,7 @@ from .zeros import zeros
 from .zeros_like import zeros_like
 
 __all__ = [
+    "_dyn_quant_matmul_4bit",
     "_embedding_bag",
     "_embedding_bag_backward",
     "_embedding_bag_forward_only",
