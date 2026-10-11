@@ -49,7 +49,7 @@ logger = logging.getLogger(__name__)
 _CANONICALIZE_5D_MIN_ELEMENTS = 1 << 23
 _MAX_ROWWISE_GRID_X = 65535
 _MAX_PRODUCT_LOCK_PROGRAMS = 32768
-_ROWWISE_TARGET_VENDORS = frozenset(("hygon", "metax", "mthreads", "nvidia"))
+_ROWWISE_TARGET_VENDORS = frozenset(("hygon", "metax", "mthreads", "nvidia", "thead"))
 _ROWWISE_REDUCE_IDS = {"sum": 0, "prod": 1, "mean": 2, "amax": 3, "amin": 4}
 # At this size, reducing 5D extrema through the 3D decoder amortizes the view
 # setup and avoids the fixed-width coordinate overhead. Cross-backend probes on
@@ -279,6 +279,37 @@ def scatter_reduce_row_gather_kernel(
 
 
 @triton.jit
+def _atomic_min_propagate_nan(base_ptr, offsets, value, mask):
+    # PPU atomic_min ignores NaN. Compare integer bits so NaN CAS completion
+    # is well-defined, and retry with the value returned by the failed CAS.
+    ptr = (base_ptr + tl.where(mask, offsets, 0)).to(tl.pointer_type(tl.int32))
+    expected = tl.load(ptr, mask=mask, other=0)
+    pending = mask
+    while tl.sum(pending.to(tl.int32), 0) > 0:
+        current = expected.to(tl.float32, bitcast=True)
+        updated = tl.minimum(current, value, propagate_nan=tl.PropagateNan.ALL)
+        desired = tl.where(pending, updated.to(tl.int32, bitcast=True), expected)
+        observed = tl.atomic_cas(ptr, expected, desired, sem="relaxed")
+        pending &= observed != expected
+        expected = observed
+
+
+@triton.jit
+def _encode_nan_min(value):
+    value = tl.cast(value, tl.float32)
+    bits = value.to(tl.int32, bitcast=True)
+    ordered = bits ^ tl.where(bits < 0, 0x7FFFFFFF, 0)
+    # Map every NaN below -inf so integer atomic_min propagates it.
+    return tl.where(value != value, -2147483648, ordered)
+
+
+@triton.jit
+def _decode_nan_min(ordered):
+    bits = ordered ^ tl.where(ordered < 0, 0x7FFFFFFF, 0)
+    return bits.to(tl.float32, bitcast=True)
+
+
+@triton.jit
 def scatter_reduce_row_atomic_kernel(
     inp_ptr,
     index_ptr,
@@ -294,6 +325,7 @@ def scatter_reduce_row_atomic_kernel(
     REDUCE: tl.constexpr,
     INCLUDE_SELF: tl.constexpr,
     BLOCK: tl.constexpr,
+    PROPAGATE_MIN_NAN: tl.constexpr = False,
 ):
     """Own one row per program so initialization and finalization stay fused."""
     row = tl.program_id(0).to(tl.int64) + tl.program_id(1).to(
@@ -320,6 +352,8 @@ def scatter_reduce_row_atomic_kernel(
         else:
             initial = float("inf")
         offsets = row * OUT_NCOLS + out_cols
+        if PROPAGATE_MIN_NAN and REDUCE == 4:
+            initial = _encode_nan_min(initial).to(tl.float32, bitcast=True)
         tl.store(accumulator_ptr + offsets, initial, mask=mask)
         if REDUCE == 2:
             initial_count = 1 if INCLUDE_SELF else 0
@@ -376,6 +410,13 @@ def scatter_reduce_row_atomic_kernel(
                 mask=mask,
                 sem="relaxed",
             )
+        elif PROPAGATE_MIN_NAN:
+            tl.atomic_min(
+                (accumulator_ptr + out_offsets).to(tl.pointer_type(tl.int32)),
+                _encode_nan_min(source),
+                mask=mask,
+                sem="relaxed",
+            )
         else:
             tl.atomic_min(
                 accumulator_ptr + out_offsets,
@@ -398,6 +439,8 @@ def scatter_reduce_row_atomic_kernel(
         mask = (row < out_nrows) & (out_cols < OUT_NCOLS)
         offsets = row * OUT_NCOLS + out_cols
         value = tl.load(accumulator_ptr + offsets, mask=mask, other=0.0)
+        if PROPAGATE_MIN_NAN and REDUCE == 4:
+            value = _decode_nan_min(value.to(tl.int32, bitcast=True))
         if REDUCE == 2:
             count = tl.load(count_ptr + offsets, mask=mask, other=0)
             inp = tl.load(inp_ptr + offsets, mask=mask, other=0.0).to(tl.float32)
@@ -1032,6 +1075,7 @@ def scatter_reduce_amax_2d_kernel(
     USE_CAS: tl.constexpr,
     BLOCK: tl.constexpr,
     LOOP: tl.constexpr,
+    PROPAGATE_MIN_NAN: tl.constexpr = False,
 ):
     pid = tl.program_id(axis=0)
     base_offsets = pid * BLOCK * LOOP + tl.arange(0, BLOCK)
@@ -1056,7 +1100,9 @@ def scatter_reduce_amax_2d_kernel(
 
         src_val = tl.load(src_ptr + src_offsets, mask=mask, other=0).to(tl.float32)
 
-        if USE_CAS:
+        if PROPAGATE_MIN_NAN and not IS_AMAX:
+            _atomic_min_propagate_nan(out_ptr, out_offsets, src_val, mask)
+        elif USE_CAS:
             stop = tl.where(mask, 0, 1).to(tl.int1)
             block_stop = False
             while not block_stop:
@@ -1567,6 +1613,7 @@ def scatter_reduce_amax_kernel(
     out_stride_4,
     BLOCK: tl.constexpr,
     LOOP: tl.constexpr,
+    PROPAGATE_MIN_NAN: tl.constexpr = False,
 ):
     pid = tl.program_id(axis=0)
     base_offsets = pid * BLOCK * LOOP + tl.arange(0, BLOCK)
@@ -1645,7 +1692,9 @@ def scatter_reduce_amax_kernel(
 
         src_val = tl.load(src_ptr + src_offsets, mask=mask, other=0).to(tl.float32)
 
-        if USE_CAS:
+        if PROPAGATE_MIN_NAN and not IS_AMAX:
+            _atomic_min_propagate_nan(out_ptr, out_offsets, src_val, mask)
+        elif USE_CAS:
             stop = tl.where(mask, 0, 1).to(tl.int1)
             block_stop = False
             while not block_stop:
@@ -1733,7 +1782,9 @@ def _select_rowwise_strategy(inp, dim, index, src, reduce, include_self, result)
         return None
 
     row_extent = max(inp.shape[1], index.shape[1])
-    if flag_gems.vendor_name == "nvidia":
+    if flag_gems.vendor_name == "thead" and reduce == "amin" and row_extent <= 4096:
+        return "atomic"
+    if flag_gems.vendor_name in ("nvidia", "thead"):
         if reduce == "prod" and row_extent <= 64:
             return "gather"
         if row_extent <= 1024:
@@ -1869,6 +1920,7 @@ def _scatter_reduce_rowwise(
                 reduce_id,
                 include_self,
                 BLOCK=block,
+                PROPAGATE_MIN_NAN=flag_gems.vendor_name == "thead",
             )
     return result
 
@@ -2229,6 +2281,7 @@ def scatter_reduce(
                     reduce == "amax",
                     use_mask,
                     use_cas,
+                    PROPAGATE_MIN_NAN=flag_gems.vendor_name == "thead",
                 )
             else:
                 scatter_reduce_amax_kernel[grid](
@@ -2265,6 +2318,7 @@ def scatter_reduce(
                     out_strides_p[2],
                     out_strides_p[3],
                     out_strides_p[4],
+                    PROPAGATE_MIN_NAN=flag_gems.vendor_name == "thead",
                 )
 
     if use_mask and reduce != "mean":

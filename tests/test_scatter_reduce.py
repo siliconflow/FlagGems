@@ -60,6 +60,7 @@ INCLUDE_SELF_CASES = (None, False)
 SHAPE_DIM_CASES = (
     pytest.param(utils.UT_SHAPES_1D[1], 0, id="1d_dim0"),
     pytest.param(utils.UT_SHAPES_2D[0], -1, id="2d_dim_last"),
+    pytest.param((17, 257), -1, id="2d_irregular_dim_last"),
     pytest.param((4, 8, 4), 1, id="3d_dim1"),
     pytest.param((2, 4, 3, 4), 2, id="4d_dim2"),
     pytest.param((2, 4, 3, 4, 5), -2, id="5d_dim_neg2"),
@@ -191,6 +192,7 @@ def _assert_scatter_reduce_close(result, reference, dtype, dim, src, reduce):
 def test_scatter_reduce(shape, dim, dtype, reduce, include_self):
     """Validate ordinary accuracy for aten::scatter_reduce.two."""
     inp, index, src = _make_test_data(shape, dim, dtype, reduce)
+    original_inp = utils.to_reference(inp.clone())
     ref_inp, ref_index, ref_src = _reference_inputs(inp, index, src)
     kwargs = _include_self_kwargs(include_self)
 
@@ -200,6 +202,7 @@ def test_scatter_reduce(shape, dim, dtype, reduce, include_self):
     result = flag_gems.scatter_reduce(inp, dim, index, src, reduce, **kwargs)
 
     assert result.data_ptr() != inp.data_ptr()
+    utils.gems_assert_equal(inp, original_inp)
     _assert_scatter_reduce_close(result, ref_out, dtype, dim, src, reduce)
 
 
@@ -231,6 +234,7 @@ def test_scatter_reduce_(shape, dim, dtype, reduce, include_self):
 def test_scatter_reduce_out(shape, dim, dtype, reduce, include_self):
     """Validate ordinary accuracy and storage for aten::scatter_reduce.two_out."""
     inp, index, src = _make_test_data(shape, dim, dtype, reduce)
+    original_inp = utils.to_reference(inp.clone())
     ref_inp, ref_index, ref_src = _reference_inputs(inp, index, src)
     result_out = torch.empty_like(inp)
     ref_out = torch.empty_like(ref_inp)
@@ -245,6 +249,7 @@ def test_scatter_reduce_out(shape, dim, dtype, reduce, include_self):
 
     assert result.data_ptr() == result_out.data_ptr()
     assert ref_result.data_ptr() == ref_out.data_ptr()
+    utils.gems_assert_equal(inp, original_inp)
     _assert_scatter_reduce_close(result, ref_result, dtype, dim, src, reduce)
 
 
@@ -742,9 +747,23 @@ def test_scatter_reduce_out_prod_partial_blocks(
 
 @pytest.mark.scatter_reduce_two_
 @pytest.mark.skipif(
-    flag_gems.vendor_name != "hygon", reason="HCU short-row and CAS regression"
+    flag_gems.vendor_name not in ("hygon", "thead"),
+    reason="HCU/PPU short-row regression",
 )
-@pytest.mark.parametrize("shape", [(2, 64), (2, 257)], ids=["short", "medium"])
+@pytest.mark.parametrize(
+    "shape",
+    [
+        (2, 64),
+        (2, 257),
+        pytest.param(
+            (2, 2049),
+            marks=pytest.mark.skipif(
+                flag_gems.vendor_name != "thead", reason="PPU wide-row regression"
+            ),
+        ),
+    ],
+    ids=["short", "medium", "wide"],
+)
 @pytest.mark.parametrize("dtype", FLOAT_DTYPES)
 @pytest.mark.parametrize("reduce", ["amax", "amin"])
 @pytest.mark.parametrize("include_self", [True, False])
@@ -792,7 +811,9 @@ def test_scatter_reduce_inplace_extrema_special_values(
         pytest.param("out", marks=pytest.mark.scatter_reduce_two_out),
     ],
 )
-@pytest.mark.skipif(flag_gems.vendor_name != "hygon", reason="HCU sum CAS regression")
+@pytest.mark.skipif(
+    flag_gems.vendor_name not in ("hygon", "thead"), reason="HCU/PPU sum contention"
+)
 @pytest.mark.parametrize("dtype", [torch.float16, torch.bfloat16, torch.float32])
 @pytest.mark.parametrize("include_self", [True, False])
 def test_scatter_reduce_sum_contention(dtype, include_self, variant):
@@ -827,3 +848,57 @@ def test_scatter_reduce_sum_contention(dtype, include_self, variant):
             )
             assert actual is target
         torch.testing.assert_close(actual.cpu().float(), reference, rtol=0, atol=0)
+
+
+@pytest.mark.skipif(flag_gems.vendor_name != "thead", reason="PPU amin NaN regression")
+@pytest.mark.parametrize(
+    "variant",
+    [
+        pytest.param("functional", marks=pytest.mark.scatter_reduce_two),
+        pytest.param("inplace", marks=pytest.mark.scatter_reduce_two_),
+        pytest.param("out", marks=pytest.mark.scatter_reduce_two_out),
+    ],
+)
+@pytest.mark.parametrize("layout", ["flat", "strided", "wide"])
+@pytest.mark.parametrize("dtype", FLOAT_DTYPES)
+@pytest.mark.parametrize("include_self", [True, False])
+def test_scatter_reduce_amin_nan_layout(variant, layout, dtype, include_self):
+    """Propagate source NaNs and preserve untouched input NaNs on PPU."""
+    shape = {"flat": (31,), "strided": (2, 3, 5), "wide": (2, 8193)}[layout]
+    inp = torch.full(shape, 2.0, dtype=dtype, device=flag_gems.device)
+    if layout == "strided":
+        inp = inp.transpose(0, 1)
+    src = torch.ones_like(inp)
+    index = torch.zeros(inp.shape, dtype=torch.int64, device=flag_gems.device)
+    src[..., 0] = float("nan")
+    src[..., 1] = -2.0
+    src[..., 2] = -0.0
+    src[..., 3] = float("inf")
+    index[..., 3] = 3
+    index[..., 1] = 1
+    index[..., 2] = 2
+    inp[..., -1] = float("nan")
+    original = inp.clone()
+    ref_inp, ref_index, ref_src = _reference_inputs(inp, index, src)
+    expected = torch.scatter_reduce(
+        ref_inp, -1, ref_index, ref_src, "amin", include_self=include_self
+    )
+    if variant == "functional":
+        result = flag_gems.scatter_reduce(
+            inp, -1, index, src, "amin", include_self=include_self
+        )
+        assert result.data_ptr() != inp.data_ptr()
+    elif variant == "inplace":
+        result = flag_gems.scatter_reduce_(
+            inp, -1, index, src, "amin", include_self=include_self
+        )
+        assert result is inp
+    else:
+        out = torch.empty_like(inp)
+        result = flag_gems.scatter_reduce_out(
+            inp, -1, index, src, "amin", include_self=include_self, out=out
+        )
+        assert result is out
+    utils.gems_assert_close(result, expected, inp.dtype, equal_nan=True)
+    if variant != "inplace":
+        torch.testing.assert_close(inp, original, rtol=0, atol=0, equal_nan=True)
