@@ -16,8 +16,6 @@ import importlib
 
 from ..utils.pointwise_dynamic import ModuleGenerator
 from ._dyn_quant_matmul_4bit import _dyn_quant_matmul_4bit
-from ._embedding_bag import _embedding_bag, _embedding_bag_forward_only
-from ._embedding_bag_backward import _embedding_bag_backward
 from ._native_batch_norm_legit_functional import _native_batch_norm_legit_functional
 from .acos_ import acos_
 from .adaptive_avg_pool2d_backward import _adaptive_avg_pool2d_backward
@@ -43,6 +41,8 @@ from .conv_transpose1d import conv_transpose1d
 from .cudnn_convolution import cudnn_convolution
 from .diagonal_scatter import diagonal_scatter
 from .div import div_mode, div_mode_
+from .embedding_bag import _embedding_bag, _embedding_bag_forward_only
+from .embedding_bag_backward import _embedding_bag_backward
 from .fractional_max_pool2d_backward import fractional_max_pool2d_backward
 from .gcd_ import gcd_
 from .gru import gru, gru_data

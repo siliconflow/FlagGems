@@ -22,8 +22,8 @@ import triton.language as tl
 from triton.language import core as tlcore
 from triton.runtime.cache import get_cache_manager
 
-from flag_gems.ops._embedding_bag import _USE_DEVICE_ASSERT
-from flag_gems.ops._embedding_bag import _embedding_bag_impl as _generic_impl
+from flag_gems.ops.embedding_bag import _USE_DEVICE_ASSERT
+from flag_gems.ops.embedding_bag import _embedding_bag_impl as _generic_impl
 from flag_gems.runtime import torch_device_fn
 from flag_gems.utils import libentry
 

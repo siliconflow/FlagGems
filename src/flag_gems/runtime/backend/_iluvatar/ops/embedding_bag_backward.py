@@ -18,7 +18,7 @@ import torch
 import triton
 import triton.language as tl
 
-from flag_gems.ops._embedding_bag_backward import (
+from flag_gems.ops.embedding_bag_backward import (
     _USE_DEVICE_ASSERT,
     _eb_backward_finish,
     _eb_backward_validate,
@@ -28,7 +28,7 @@ from flag_gems.ops._embedding_bag_backward import (
 from flag_gems.runtime import torch_device_fn
 from flag_gems.utils import libentry
 
-from ._embedding_bag import _check_corex_error, _check_native_error
+from .embedding_bag import _check_corex_error, _check_native_error
 
 logger = logging.getLogger(__name__)
 

@@ -633,9 +633,13 @@ def _check_iluvatar_error_after_mixed_dtypes(target):
     flag_gems.vendor_name != "iluvatar",
     reason="CoreX assertion regression after loading mixed dtype kernels",
 )
-@pytest.mark.embedding_bag
-@pytest.mark.embedding_bag_forward_only
-@pytest.mark.parametrize("target", ["forward", "forward-only"])
+@pytest.mark.parametrize(
+    "target",
+    [
+        pytest.param("forward", marks=pytest.mark.underscore_embedding_bag),
+        pytest.param("forward-only", marks=pytest.mark.embedding_bag_forward_only),
+    ],
+)
 def test_embedding_bag_iluvatar_error_after_mixed_dtypes(target):
     if os.environ.get(_ERROR_CHILD) != "1":
         _run_isolated_error(
