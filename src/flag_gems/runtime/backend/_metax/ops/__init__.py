@@ -21,6 +21,7 @@ from .conv_transpose1d import conv_transpose1d, conv_transpose1d_output_size
 from .erfinv import erfinv
 from .erfinv_ import erfinv_
 from .exponential_ import exponential_
+from .flash_attention_backward import flash_attention_backward
 from .float_power_ import float_power_tensor_scalar_, float_power_tensor_tensor_
 from .full import full
 from .full_like import full_like
@@ -173,6 +174,7 @@ __all__ = [
     "erfinv",
     "erfinv_",
     "exponential_",
+    "flash_attention_backward",
     "float_power_tensor_scalar_",
     "float_power_tensor_tensor_",
     "full",

@@ -53,6 +53,7 @@ from .embedding_spmdm import embedding_spmdm
 from .exponential import exponential
 from .exponential_ import exponential_
 from .fill import fill_scalar, fill_scalar_, fill_tensor, fill_tensor_
+from .flash_attention_backward import flash_attention_backward
 from .flip import flip
 from .full import full
 from .full_like import full_like
@@ -227,6 +228,7 @@ __all__ = [
     "fill_scalar_",
     "fill_tensor",
     "fill_tensor_",
+    "flash_attention_backward",
     "flash_attention_forward",
     "flash_attn_varlen_func",
     "flip",
